@@ -32,7 +32,7 @@ function rejection(config: Config, channel: ChannelId): "ignore" | "reject" {
 
 function checkAllowlist(config: Config, msg: InboundMessage): boolean {
 	const list = allowlist(config, msg.channel)
-	if (!list) return true
+	if (!list || list.length === 0) return true
 	return list.includes(msg.peerId)
 }
 
