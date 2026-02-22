@@ -136,15 +136,15 @@ describe("experimental.chat.system.transform hook", () => {
 		expect(plugin["experimental.chat.system.transform"]).toBeDefined()
 	})
 
-	test("does nothing when memory is empty", async () => {
+	test("always injects memory instructions even when memory is empty", async () => {
 		const transform = plugin["experimental.chat.system.transform"] as (
 			input: unknown,
 			output: { system: string[] },
 		) => Promise<void>
-
 		const output = { system: [] as string[] }
 		await transform({}, output)
-		expect(output.system).toHaveLength(0)
+		expect(output.system).toHaveLength(1)
+		expect(output.system[0]).toContain("Memory Instructions")
 	})
 
 	test("injects relevant memories into output.system when entries exist", async () => {

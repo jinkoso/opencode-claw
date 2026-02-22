@@ -1,6 +1,6 @@
 {
   "name": "opencode-claw",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Wrap OpenCode with persistent memory, messaging channels, and cron jobs",
   "license": "MIT",
   "type": "module",
