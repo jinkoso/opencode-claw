@@ -300,4 +300,4 @@ src/
 
 ## License
 
-TBD
+[MIT](LICENSE)

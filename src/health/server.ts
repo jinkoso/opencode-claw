@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import type { ChannelAdapter, ChannelId } from "../channels/types.js"
+import { createHttpServer } from "../compat.js"
 import type { OutboxConfig } from "../config/types.js"
 import type { MemoryBackend } from "../memory/types.js"
 import type { Logger } from "../utils/logger.js"
@@ -31,7 +32,7 @@ function channelsInfo(adapters: Map<ChannelId, ChannelAdapter>): Record<string, 
 }
 
 export function createHealthServer(deps: HealthDeps) {
-	let srv: ReturnType<typeof Bun.serve> | null = null
+	let srv: ReturnType<typeof createHttpServer> | null = null
 
 	async function handleRequest(req: Request): Promise<Response> {
 		const url = new URL(req.url)
@@ -74,10 +75,8 @@ export function createHealthServer(deps: HealthDeps) {
 	}
 
 	function start(): void {
-		srv = Bun.serve({
-			port: deps.port,
-			fetch: handleRequest,
-		})
+		srv = createHttpServer(deps.port, handleRequest)
+		srv.start()
 		deps.logger.info("health: server started", { port: deps.port })
 	}
 

@@ -1,3 +1,4 @@
+import { fileExists, readJsonFile, writeTextFile } from "../compat.js"
 import type { SessionsConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
 
@@ -5,14 +6,13 @@ export async function loadSessionMap(
 	config: SessionsConfig,
 	logger: Logger,
 ): Promise<Map<string, string>> {
-	const file = Bun.file(config.persistPath)
-	if (!(await file.exists())) {
+	if (!(await fileExists(config.persistPath))) {
 		logger.debug("sessions: no persisted map found, starting fresh")
 		return new Map()
 	}
 
 	try {
-		const data = (await file.json()) as Record<string, string>
+		const data = await readJsonFile<Record<string, string>>(config.persistPath)
 		const map = new Map(Object.entries(data))
 		logger.info("sessions: loaded persisted map", { count: map.size })
 		return map
@@ -30,6 +30,6 @@ export async function saveSessionMap(
 	logger: Logger,
 ): Promise<void> {
 	const data = Object.fromEntries(map)
-	await Bun.write(config.persistPath, JSON.stringify(data, null, 2))
+	await writeTextFile(config.persistPath, JSON.stringify(data, null, 2))
 	logger.debug("sessions: persisted map", { count: map.size })
 }

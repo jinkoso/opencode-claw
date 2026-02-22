@@ -1,7 +1,8 @@
 import { readdir } from "node:fs/promises"
-import { mkdir, rename } from "node:fs/promises"
+import { mkdir, rename, unlink } from "node:fs/promises"
 import { join } from "node:path"
 import type { ChannelAdapter, ChannelId } from "../channels/types.js"
+import { fileExists, readTextFile, writeTextFile } from "../compat.js"
 import type { OutboxConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
 import type { OutboxEntry } from "./writer.js"
@@ -41,7 +42,7 @@ export function createOutboxDrainer(
 					if (!file.endsWith(".json")) continue
 
 					const filepath = join(peerDir, file)
-					const raw = await Bun.file(filepath).text()
+					const raw = await readTextFile(filepath)
 					const entry = JSON.parse(raw) as OutboxEntry
 					results.push({ entry, filepath })
 				}
@@ -79,12 +80,7 @@ export function createOutboxDrainer(
 					text: entry.text,
 					threadId: entry.threadId,
 				})
-				// Delete successfully delivered entry
-				const file = Bun.file(filepath)
-				if (await file.exists()) {
-					await Bun.write(filepath, "")
-					// Use unlink via fs
-					const { unlink } = await import("node:fs/promises")
+				if (await fileExists(filepath)) {
 					await unlink(filepath)
 				}
 				logger.debug("outbox: delivered", {
@@ -96,7 +92,7 @@ export function createOutboxDrainer(
 				if (entry.attempts >= config.maxAttempts) {
 					await moveToDead(filepath, entry)
 				} else {
-					await Bun.write(filepath, JSON.stringify(entry, null, 2))
+					await writeTextFile(filepath, JSON.stringify(entry, null, 2))
 					logger.warn("outbox: delivery failed, will retry", {
 						id: entry.id,
 						attempts: entry.attempts,

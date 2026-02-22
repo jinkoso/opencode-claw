@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
+import { fileExists, readTextFile, writeTextFile } from "../compat.js"
 import type {
 	MemoryBackend,
 	MemoryCategory,
@@ -81,13 +82,12 @@ export function createTxtMemoryBackend(directory: string): MemoryBackend {
 	let initialized = false
 
 	async function readFile(): Promise<string> {
-		const file = Bun.file(filepath)
-		if (!(await file.exists())) return ""
-		return file.text()
+		if (!(await fileExists(filepath))) return ""
+		return readTextFile(filepath)
 	}
 
 	async function writeFile(content: string): Promise<void> {
-		await Bun.write(filepath, content)
+		await writeTextFile(filepath, content)
 	}
 
 	return {

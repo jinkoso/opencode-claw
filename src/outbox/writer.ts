@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import type { ChannelId } from "../channels/types.js"
+import { writeTextFile } from "../compat.js"
 import type { OutboxConfig } from "../config/types.js"
 
 export type OutboxEntry = {
@@ -43,7 +44,7 @@ export function createOutboxWriter(config: OutboxConfig): OutboxWriter {
 			await mkdir(dir, { recursive: true })
 
 			const path = join(dir, `${id}.json`)
-			await Bun.write(path, JSON.stringify(full, null, 2))
+			await writeTextFile(path, JSON.stringify(full, null, 2))
 		},
 	}
 }

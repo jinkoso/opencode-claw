@@ -1,3 +1,4 @@
+import { createFileWriter } from "../compat.js"
 import type { LogConfig } from "../config/types.js"
 
 type Level = "debug" | "info" | "warn" | "error"
@@ -6,7 +7,7 @@ const levels: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 
 export function createLogger(config: LogConfig) {
 	const threshold = levels[config.level]
-	const writer = config.file ? Bun.file(config.file).writer() : null
+	const writer = config.file ? createFileWriter(config.file) : null
 
 	function write(level: Level, msg: string, data?: Record<string, unknown>) {
 		if (levels[level] < threshold) return

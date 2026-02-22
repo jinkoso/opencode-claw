@@ -1,0 +1,12 @@
+src/
+test/
+data/
+docs/
+*.json
+!package.json
+tsconfig*.json
+biome.json
+.gitignore
+bun.lock
+bun.lockb
+node_modules/

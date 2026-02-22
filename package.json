@@ -1,10 +1,47 @@
 {
   "name": "opencode-claw",
   "version": "0.1.0",
+  "description": "Wrap OpenCode with persistent memory, messaging channels, and cron jobs",
+  "license": "MIT",
   "type": "module",
-  "private": true,
+  "main": "./dist/exports.js",
+  "types": "./dist/exports.d.ts",
+  "bin": {
+    "opencode-claw": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/exports.js",
+      "types": "./dist/exports.d.ts"
+    },
+    "./plugin": {
+      "import": "./dist/memory/plugin-entry.js",
+      "types": "./dist/memory/plugin-entry.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "opencode-claw.example.json"
+  ],
+  "keywords": [
+    "opencode",
+    "ai",
+    "assistant",
+    "telegram",
+    "slack",
+    "whatsapp",
+    "memory",
+    "cron"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "bun run src/index.ts",
+    "build": "tsc --build",
+    "prepublishOnly": "npm run build",
     "typecheck": "bun x tsc --noEmit",
     "typecheck:test": "bun x tsc --noEmit -p tsconfig.test.json",
     "lint": "bun x biome check src/ test/",
@@ -25,6 +62,7 @@
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/bun": "^1.2.0",
+    "@types/node": "^20.0.0",
     "@types/node-cron": "^3.0.11",
     "@biomejs/biome": "^1.9.0"
   }

@@ -1,4 +1,5 @@
-import { resolve } from "node:path"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { createOpencode } from "@opencode-ai/sdk"
 import { createRouter } from "./channels/router.js"
 import { createSlackAdapter } from "./channels/slack.js"
@@ -16,7 +17,7 @@ import { loadSessionMap } from "./sessions/persistence.js"
 import { createLogger } from "./utils/logger.js"
 import { onShutdown, setupShutdown } from "./utils/shutdown.js"
 
-async function main() {
+export async function main() {
 	const config = await loadConfig()
 	const logger = createLogger(config.log)
 
@@ -31,8 +32,8 @@ async function main() {
 		await memory.close()
 	})
 
-	// Start OpenCode server + client with memory plugin
-	const pluginPath = `file://${resolve("./src/memory/plugin-entry.ts")}`
+	const dir = dirname(fileURLToPath(import.meta.url))
+	const pluginPath = `file://${resolve(dir, "memory/plugin-entry.js")}`
 	logger.info("opencode: starting server...", { plugins: [pluginPath] })
 	const { client, server } = await createOpencode({
 		port: config.opencode.port,
@@ -144,8 +145,3 @@ async function main() {
 		health: config.health?.enabled ?? false,
 	})
 }
-
-main().catch((err) => {
-	console.error("Fatal:", err)
-	process.exit(1)
-})

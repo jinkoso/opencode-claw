@@ -1,3 +1,4 @@
+import { fileExists, readJsonFile } from "../compat.js"
 import { configSchema } from "./schema.js"
 import type { Config } from "./types.js"
 
@@ -33,9 +34,8 @@ export async function loadConfig(): Promise<Config> {
 	let found = ""
 
 	for (const p of searchPaths) {
-		const file = Bun.file(p)
-		if (await file.exists()) {
-			raw = await file.json()
+		if (await fileExists(p)) {
+			raw = await readJsonFile<unknown>(p)
 			found = p
 			break
 		}
