@@ -1,7 +1,8 @@
-import type { OpencodeClient } from "@opencode-ai/sdk"
+import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import cron from "node-cron"
 import type { CronConfig, CronJobConfig } from "../config/types.js"
 import type { OutboxWriter } from "../outbox/writer.js"
+import { promptStreaming } from "../sessions/prompt.js"
 import type { Logger } from "../utils/logger.js"
 
 type ScheduledJob = {
@@ -14,15 +15,6 @@ type CronSchedulerDeps = {
 	outbox: OutboxWriter
 	config: CronConfig
 	logger: Logger
-}
-
-function extractText(parts: ReadonlyArray<{ type: string; text?: string }>): string {
-	return parts
-		.filter(
-			(p): p is { type: "text"; text: string } => p.type === "text" && typeof p.text === "string",
-		)
-		.map((p) => p.text)
-		.join("\n\n")
 }
 
 export function createCronScheduler(deps: CronSchedulerDeps) {
@@ -42,41 +34,26 @@ export function createCronScheduler(deps: CronSchedulerDeps) {
 
 		try {
 			const session = await deps.client.session.create({
-				body: { title },
+				title,
 			})
 			if (!session.data) throw new Error("session.create returned no data")
 
 			const sessionId = session.data.id
 			deps.logger.debug(`cron: job "${job.id}" session created`, { sessionId })
 
-			// session.prompt() is synchronous — blocks until the agent finishes.
-			// Wrap with AbortSignal timeout for safety.
 			const timeout = job.timeoutMs ?? deps.config.defaultTimeoutMs
-			const controller = new AbortController()
-			const timer = setTimeout(() => controller.abort(), timeout)
 
-			let result: Awaited<ReturnType<typeof deps.client.session.prompt>>
+			let text: string
 			try {
-				result = await deps.client.session.prompt({
-					path: { id: sessionId },
-					body: { parts: [{ type: "text", text: job.prompt }] },
-				})
+				text = await promptStreaming(deps.client, sessionId, job.prompt, timeout, deps.logger)
 			} catch (err) {
-				if (controller.signal.aborted) {
+				if (err instanceof Error && err.message === "timeout") {
 					deps.logger.warn(`cron: job "${job.id}" timed out after ${timeout}ms`)
 					return
 				}
 				throw err
-			} finally {
-				clearTimeout(timer)
 			}
 
-			if (!result.data) {
-				deps.logger.warn(`cron: job "${job.id}" returned no data`)
-				return
-			}
-
-			const text = extractText(result.data.parts)
 			deps.logger.info(`cron: job "${job.id}" completed`, {
 				sessionId,
 				responseLength: text.length,

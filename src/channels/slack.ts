@@ -98,6 +98,9 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 				thread_ts: message.threadId,
 			})
 		},
+		async sendTyping(_peerId) {
+			// Slack has no general bot typing indicator API
+		},
 
 		status() {
 			return state

@@ -91,6 +91,9 @@ export function createTelegramAdapter(config: TelegramConfig, logger: Logger): C
 				reply_parameters: message.replyToId ? { message_id: Number(message.replyToId) } : undefined,
 			})
 		},
+		async sendTyping(peerId) {
+			await bot.api.sendChatAction(Number(peerId), "typing")
+		},
 
 		status() {
 			return state

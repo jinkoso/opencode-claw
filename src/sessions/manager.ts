@@ -1,4 +1,4 @@
-import type { OpencodeClient } from "@opencode-ai/sdk"
+import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { SessionsConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
 import { saveSessionMap } from "./persistence.js"
@@ -32,7 +32,7 @@ export function createSessionManager(
 		if (existing) return existing
 
 		const session = await client.session.create({
-			body: { title: title ?? key },
+			title: title ?? key,
 		})
 		if (!session.data) throw new Error("session.create returned no data")
 		map.set(key, session.data.id)
@@ -49,7 +49,7 @@ export function createSessionManager(
 
 	async function newSession(key: string, title?: string): Promise<string> {
 		const session = await client.session.create({
-			body: { title: title ?? `New session ${new Date().toISOString()}` },
+			title: title ?? `New session ${new Date().toISOString()}`,
 		})
 		if (!session.data) throw new Error("session.create returned no data")
 		map.set(key, session.data.id)

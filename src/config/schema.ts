@@ -110,6 +110,13 @@ export const configSchema = z.object({
 	router: z
 		.object({
 			timeoutMs: z.number().int().min(1000).default(300_000),
+			progress: z
+				.object({
+					enabled: z.boolean().default(true),
+					toolThrottleMs: z.number().int().min(1000).default(5_000),
+					heartbeatMs: z.number().int().min(10_000).default(60_000),
+				})
+				.default({}),
 		})
 		.default({}),
 })

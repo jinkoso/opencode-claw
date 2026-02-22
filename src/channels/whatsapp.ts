@@ -168,6 +168,17 @@ export function createWhatsAppAdapter(config: WhatsAppConfig, logger: Logger): C
 			const jid = `${peerId}@s.whatsapp.net`
 			await sock.sendMessage(jid, { text: message.text })
 		},
+		async sendTyping(peerId) {
+			if (!sock) return
+			const jid = `${peerId}@s.whatsapp.net`
+			await sock.sendPresenceUpdate("composing", jid)
+		},
+
+		async stopTyping(peerId) {
+			if (!sock) return
+			const jid = `${peerId}@s.whatsapp.net`
+			await sock.sendPresenceUpdate("paused", jid)
+		},
 
 		status() {
 			return state

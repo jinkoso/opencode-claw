@@ -28,5 +28,7 @@ export type ChannelAdapter = {
 	start(handler: InboundMessageHandler): Promise<void>
 	stop(): Promise<void>
 	send(peerId: string, message: OutboundMessage): Promise<void>
+	sendTyping?(peerId: string): Promise<void>
+	stopTyping?(peerId: string): Promise<void>
 	status(): ChannelStatus
 }

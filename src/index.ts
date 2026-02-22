@@ -1,6 +1,6 @@
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { createOpencode } from "@opencode-ai/sdk"
+import { createOpencode } from "@opencode-ai/sdk/v2"
 import { createRouter } from "./channels/router.js"
 import { createSlackAdapter } from "./channels/slack.js"
 import { createTelegramAdapter } from "./channels/telegram.js"

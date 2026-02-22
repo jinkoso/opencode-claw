@@ -1,7 +1,9 @@
-import type { OpencodeClient } from "@opencode-ai/sdk"
+import type { OpencodeClient, QuestionRequest } from "@opencode-ai/sdk/v2"
 import type { Config } from "../config/types.js"
 import type { SessionManager } from "../sessions/manager.js"
 import { buildSessionKey } from "../sessions/manager.js"
+import { promptStreaming } from "../sessions/prompt.js"
+import type { ProgressOptions } from "../sessions/prompt.js"
 import type { Logger } from "../utils/logger.js"
 import type { ChannelAdapter, ChannelId, InboundMessage } from "./types.js"
 
@@ -34,15 +36,6 @@ function checkAllowlist(config: Config, msg: InboundMessage): boolean {
 	return list.includes(msg.peerId)
 }
 
-function extractText(parts: ReadonlyArray<{ type: string; text?: string }>): string {
-	return parts
-		.filter(
-			(p): p is { type: "text"; text: string } => p.type === "text" && typeof p.text === "string",
-		)
-		.map((p) => p.text)
-		.join("\n\n")
-}
-
 type Command = {
 	name: string
 	args: string
@@ -62,9 +55,20 @@ const HELP_TEXT = `Available commands:
 /sessions — List your sessions
 /current — Show current session
 /fork — Fork current session into a new one
+/cancel — Abort the currently running agent
 /help — Show this help`
 
-async function handleCommand(cmd: Command, msg: InboundMessage, deps: RouterDeps): Promise<string> {
+// peerKey uniquely identifies a peer within a channel for active-stream tracking
+function peerKey(channel: ChannelId, peerId: string): string {
+	return `${channel}:${peerId}`
+}
+
+async function handleCommand(
+	cmd: Command,
+	msg: InboundMessage,
+	deps: RouterDeps,
+	activeStreams: Map<string, string>,
+): Promise<string> {
 	const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
 	const prefix = `${msg.channel}:${msg.peerId}`
 
@@ -97,13 +101,21 @@ async function handleCommand(cmd: Command, msg: InboundMessage, deps: RouterDeps
 			const current = deps.sessions.currentSession(key)
 			if (!current) return "No active session to fork."
 			const result = await deps.client.session.fork({
-				path: { id: current },
-				body: {},
+				sessionID: current,
 			})
 			if (!result.data) return "Fork failed: no data returned."
 			const forked = result.data.id
 			await deps.sessions.switchSession(key, forked)
 			return `Forked into new session: ${forked}`
+		}
+		case "cancel": {
+			const pk = peerKey(msg.channel, msg.peerId)
+			const sessionId = activeStreams.get(pk)
+			if (!sessionId) return "No agent is currently running."
+			const result = await deps.client.session.abort({ sessionID: sessionId })
+			const aborted = result.data ?? false
+			deps.logger.info("router: session aborted by user", { sessionId, aborted })
+			return aborted ? "Agent aborted." : "Abort request sent (agent may already be done)."
 		}
 		case "help": {
 			return HELP_TEXT
@@ -114,7 +126,16 @@ async function handleCommand(cmd: Command, msg: InboundMessage, deps: RouterDeps
 	}
 }
 
-async function routeMessage(msg: InboundMessage, deps: RouterDeps): Promise<void> {
+type QuestionResolver = {
+	resolve: (text: string) => void
+	timeout: ReturnType<typeof setTimeout>
+}
+async function routeMessage(
+	msg: InboundMessage,
+	deps: RouterDeps,
+	activeStreams: Map<string, string>,
+	pendingQuestions: Map<string, QuestionResolver>,
+): Promise<void> {
 	const adapter = deps.adapters.get(msg.channel)
 	if (!adapter) {
 		deps.logger.warn("router: no adapter for channel", { channel: msg.channel })
@@ -137,7 +158,7 @@ async function routeMessage(msg: InboundMessage, deps: RouterDeps): Promise<void
 	// Command interception
 	const cmd = parseCommand(msg.text)
 	if (cmd) {
-		const reply = await handleCommand(cmd, msg, deps)
+		const reply = await handleCommand(cmd, msg, deps, activeStreams)
 		await adapter.send(msg.peerId, { text: reply, replyToId: msg.replyToId })
 		return
 	}
@@ -148,40 +169,100 @@ async function routeMessage(msg: InboundMessage, deps: RouterDeps): Promise<void
 
 	deps.logger.debug("router: prompting session", { sessionId, channel: msg.channel })
 
-	const controller = new AbortController()
-	const timer = setTimeout(() => controller.abort(), deps.timeoutMs)
+	const pk = peerKey(msg.channel, msg.peerId)
+	activeStreams.set(pk, sessionId)
+	// Start typing indicator
+	if (adapter.sendTyping) {
+		await adapter.sendTyping(msg.peerId).catch(() => {})
+	}
 
-	let result: Awaited<ReturnType<typeof deps.client.session.prompt>>
-	try {
-		result = await deps.client.session.prompt({
-			path: { id: sessionId },
-			body: { parts: [{ type: "text", text: msg.text }] },
+	const progressEnabled = deps.config.router.progress.enabled
+
+	function formatQuestion(request: QuestionRequest): string {
+		const lines: string[] = ["❓ The agent has a question:"]
+		for (const q of request.questions) {
+			lines.push("")
+			if (q.header) lines.push(`**${q.header}**`)
+			lines.push(q.question)
+			if (q.options && q.options.length > 0) {
+				for (let i = 0; i < q.options.length; i++) {
+					const opt = q.options[i]
+					if (opt) {
+						lines.push(`  ${i + 1}. ${opt.label}${opt.description ? ` — ${opt.description}` : ""}`)
+					}
+				}
+			}
+			if (q.multiple) lines.push("(You can pick multiple — separate with commas)")
+		}
+		lines.push("")
+		lines.push("Reply with your answer:")
+		return lines.join("\n")
+	}
+
+	function waitForUserReply(questionTimeoutMs: number): Promise<string> {
+		return new Promise<string>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				pendingQuestions.delete(pk)
+				reject(new Error("question_timeout"))
+			}, questionTimeoutMs)
+			pendingQuestions.set(pk, { resolve, timeout: timer })
 		})
+	}
+
+	const progress: ProgressOptions | undefined = progressEnabled
+		? {
+				onToolRunning: (_tool, title) =>
+					adapter.send(msg.peerId, {
+						text: `🔧 ${title}...`,
+						replyToId: msg.replyToId,
+					}),
+				onHeartbeat: async () => {
+					if (adapter.sendTyping) {
+						await adapter.sendTyping(msg.peerId).catch(() => {})
+					}
+					await adapter.send(msg.peerId, { text: "⏳ Still working..." })
+				},
+				onQuestion: async (request) => {
+					const text = formatQuestion(request)
+					await adapter.send(msg.peerId, { text })
+					const userReply = await waitForUserReply(deps.timeoutMs)
+					return request.questions.map(() => [userReply])
+				},
+				toolThrottleMs: deps.config.router.progress.toolThrottleMs,
+				heartbeatMs: deps.config.router.progress.heartbeatMs,
+			}
+		: undefined
+	let reply: string
+	try {
+		reply = await promptStreaming(
+			deps.client,
+			sessionId,
+			msg.text,
+			deps.timeoutMs,
+			deps.logger,
+			progress,
+		)
 	} catch (err) {
-		clearTimeout(timer)
-		if (controller.signal.aborted) {
-			deps.logger.warn("router: session prompt timed out", {
-				sessionId,
-				timeoutMs: deps.timeoutMs,
-			})
+		if (err instanceof Error && err.message === "timeout") {
 			await adapter.send(msg.peerId, {
 				text: "Request timed out. The agent took too long to respond.",
 				replyToId: msg.replyToId,
 			})
 			return
 		}
+		if (err instanceof Error && err.message === "aborted") {
+			// Already notified via /cancel reply; nothing more to send
+			return
+		}
 		throw err
+	} finally {
+		activeStreams.delete(pk)
+		pendingQuestions.delete(pk)
+		if (adapter.stopTyping) {
+			await adapter.stopTyping(msg.peerId).catch(() => {})
+		}
 	}
-	clearTimeout(timer)
 
-	if (!result.data) {
-		deps.logger.error("router: prompt returned no data", { sessionId })
-		await adapter.send(msg.peerId, { text: "Error: no response from agent." })
-		return
-	}
-
-	// Extract text parts from response
-	const reply = extractText(result.data.parts)
 	if (!reply) {
 		deps.logger.warn("router: empty response from agent", { sessionId })
 		await adapter.send(msg.peerId, { text: "(empty response)" })
@@ -192,9 +273,23 @@ async function routeMessage(msg: InboundMessage, deps: RouterDeps): Promise<void
 }
 
 export function createRouter(deps: RouterDeps) {
+	// Tracks which sessionId is currently streaming for each channel:peerId pair
+	const activeStreams = new Map<string, string>()
+	// Tracks pending question resolvers — when agent asks a question, user's next message resolves it
+	const pendingQuestions = new Map<string, QuestionResolver>()
 	async function handler(msg: InboundMessage): Promise<void> {
 		try {
-			await routeMessage(msg, deps)
+			// Check if this message is a reply to a pending question
+			const pk = peerKey(msg.channel, msg.peerId)
+			const pending = pendingQuestions.get(pk)
+			if (pending) {
+				clearTimeout(pending.timeout)
+				pendingQuestions.delete(pk)
+				pending.resolve(msg.text)
+				return
+			}
+
+			await routeMessage(msg, deps, activeStreams, pendingQuestions)
 		} catch (err) {
 			deps.logger.error("router: unhandled error", {
 				channel: msg.channel,
@@ -210,7 +305,6 @@ export function createRouter(deps: RouterDeps) {
 			}
 		}
 	}
-
 	return { handler }
 }
 
