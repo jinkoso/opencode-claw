@@ -1,0 +1,64 @@
+{
+  "opencode": {
+    "port": 0
+  },
+  "memory": {
+    "backend": "txt",
+    "txt": {
+      "directory": "./data/memory"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "allowlist": ["your_telegram_username"],
+      "mode": "polling",
+      "rejectionBehavior": "ignore"
+    },
+    "slack": {
+      "enabled": false,
+      "botToken": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
+      "mode": "socket",
+      "rejectionBehavior": "ignore"
+    },
+    "whatsapp": {
+      "enabled": false,
+      "allowlist": ["5511999887766"],
+      "authDir": "./data/whatsapp/auth",
+      "debounceMs": 1000,
+      "rejectionBehavior": "ignore"
+    }
+  },
+  "cron": {
+    "enabled": false,
+    "defaultTimeoutMs": 300000,
+    "jobs": [
+      {
+        "id": "daily-standup",
+        "schedule": "0 9 * * 1-5",
+        "description": "Morning standup briefing",
+        "prompt": "Check my Linear board for P1 and P2 issues assigned to me. Summarize what needs attention today.",
+        "reportTo": {
+          "channel": "telegram",
+          "peerId": "your_telegram_username"
+        },
+        "enabled": true,
+        "timeoutMs": 300000
+      }
+    ]
+  },
+  "sessions": {
+    "titleTemplate": "{{channel}}:{{peerId}}",
+    "persistPath": "./data/sessions.json"
+  },
+  "outbox": {
+    "directory": "./data/outbox",
+    "pollIntervalMs": 500,
+    "maxAttempts": 3
+  },
+  "log": {
+    "level": "info"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "opencode-claw",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "bun x tsc --noEmit",
+    "lint": "bun x biome check src/",
+    "format": "bun x biome format --write src/"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.2.10",
+    "@opencode-ai/plugin": "^1.2.10",
+    "grammy": "^1.35.0",
+    "@grammyjs/runner": "^2.0.3",
+    "@slack/bolt": "^4.3.0",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "node-cron": "^3.0.3",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "^1.2.0",
+    "@types/node-cron": "^3.0.11",
+    "@biomejs/biome": "^1.9.0"
+  }
+}
