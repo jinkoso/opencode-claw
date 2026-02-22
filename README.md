@@ -51,8 +51,7 @@ opencode-claw
 
 ```bash
 # 1. Create a config file in your project directory
-curl -O https://raw.githubusercontent.com/jinkoso/opencode-claw/main/opencode-claw.example.json
-mv opencode-claw.example.json opencode-claw.json
+npx opencode-claw --init
 
 # 2. Edit opencode-claw.json with your tokens and preferences
 #    (see Configuration section below)
@@ -60,6 +59,8 @@ mv opencode-claw.example.json opencode-claw.json
 # 3. Run
 npx opencode-claw
 ```
+
+Or create `opencode-claw.json` manually — see the [example config](https://github.com/jinkoso/opencode-claw/blob/main/opencode-claw.example.json) for all available options.
 
 The service starts an OpenCode server, connects your configured channels, initializes the memory system, and begins listening for messages.
 
