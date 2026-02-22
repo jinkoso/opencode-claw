@@ -6,8 +6,11 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "typecheck": "bun x tsc --noEmit",
-    "lint": "bun x biome check src/",
-    "format": "bun x biome format --write src/"
+    "typecheck:test": "bun x tsc --noEmit -p tsconfig.test.json",
+    "lint": "bun x biome check src/ test/",
+    "format": "bun x biome format --write src/",
+    "test": "bun test",
+    "test:e2e": "bun test test/"
   },
   "dependencies": {
     "@opencode-ai/sdk": "^1.2.10",
