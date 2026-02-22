@@ -11,3 +11,5 @@ export type CronJobConfig = CronConfig["jobs"][number]
 export type SessionsConfig = Config["sessions"]
 export type OutboxConfig = Config["outbox"]
 export type LogConfig = Config["log"]
+export type HealthConfig = NonNullable<Config["health"]>
+export type RouterConfig = Config["router"]

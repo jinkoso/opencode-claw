@@ -6,6 +6,8 @@ import type { OutboxConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
 import type { OutboxEntry } from "./writer.js"
 
+const DEAD_LETTER_CHECK_INTERVAL = 60_000
+
 export type OutboxDrainer = {
 	start(): void
 	stop(): void
@@ -114,6 +116,24 @@ export function createOutboxDrainer(
 		}
 	}
 
+	async function checkDeadLetters(): Promise<void> {
+		const deadDir = join(config.directory, "dead")
+		try {
+			const entries = await readdir(deadDir, { recursive: true })
+			const count = entries.filter((e) => e.endsWith(".json")).length
+			if (count > 0) {
+				logger.warn("outbox: dead letters detected", {
+					count,
+					path: deadDir,
+				})
+			}
+		} catch {
+			// dead directory doesn't exist yet — no dead letters
+		}
+	}
+
+	let deadLetterTimer: ReturnType<typeof setInterval> | null = null
+
 	return {
 		start() {
 			timer = setInterval(() => {
@@ -123,6 +143,11 @@ export function createOutboxDrainer(
 					})
 				})
 			}, config.pollIntervalMs)
+
+			deadLetterTimer = setInterval(() => {
+				checkDeadLetters().catch(() => {})
+			}, DEAD_LETTER_CHECK_INTERVAL)
+
 			logger.info("outbox: drainer started", {
 				pollIntervalMs: config.pollIntervalMs,
 			})
@@ -132,6 +157,10 @@ export function createOutboxDrainer(
 			if (timer) {
 				clearInterval(timer)
 				timer = null
+			}
+			if (deadLetterTimer) {
+				clearInterval(deadLetterTimer)
+				deadLetterTimer = null
 			}
 			logger.info("outbox: drainer stopped")
 		},

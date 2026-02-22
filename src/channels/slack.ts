@@ -1,6 +1,7 @@
 import { App } from "@slack/bolt"
 import type { SlackConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
+import { createReconnector } from "../utils/reconnect.js"
 import type {
 	ChannelAdapter,
 	ChannelStatus,
@@ -19,7 +20,18 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 	let state: ChannelStatus = "disconnected"
 	let handler: InboundMessageHandler | undefined
 
-	// Listen for messages (not from bots)
+	const reconnector = createReconnector({
+		name: "slack",
+		logger,
+		connect: async () => {
+			state = "connecting"
+			await app.start()
+			state = "connected"
+			reconnector.reset()
+			logger.info("slack: reconnected")
+		},
+	})
+
 	app.message(async ({ message, say }) => {
 		if (!handler) return
 		if (!("text" in message) || !message.text) return
@@ -29,14 +41,11 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		const peerId = message.user
 		const channel = "channel" in message ? (message.channel as string) : undefined
 
-		// Allowlist check
 		if (config.allowlist && config.allowlist.length > 0 && !config.allowlist.includes(peerId)) {
 			if (config.rejectionBehavior === "reject") {
 				await say("This assistant is private.")
 			}
-			logger.debug("slack: message dropped (not in allowlist)", {
-				peerId,
-			})
+			logger.debug("slack: message dropped (not in allowlist)", { peerId })
 			return
 		}
 
@@ -54,6 +63,14 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		await handler(msg)
 	})
 
+	app.error(async (error) => {
+		logger.error("slack: app error", {
+			error: error.message,
+		})
+		state = "error"
+		reconnector.attempt()
+	})
+
 	return {
 		id: "slack",
 		name: "Slack",
@@ -68,14 +85,13 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		},
 
 		async stop() {
+			reconnector.stop()
 			state = "disconnected"
 			await app.stop()
 			logger.info("slack: app stopped")
 		},
 
 		async send(peerId, message: OutboundMessage) {
-			// For Slack, peerId is the channel or DM channel ID
-			// threadId maps to thread_ts for threading support
 			await app.client.chat.postMessage({
 				channel: peerId,
 				text: message.text,

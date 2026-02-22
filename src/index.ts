@@ -7,6 +7,7 @@ import type { ChannelAdapter, ChannelId } from "./channels/types.js"
 import { createWhatsAppAdapter } from "./channels/whatsapp.js"
 import { loadConfig } from "./config/loader.js"
 import { createCronScheduler } from "./cron/scheduler.js"
+import { createHealthServer } from "./health/server.js"
 import { createMemoryBackend } from "./memory/factory.js"
 import { createOutboxDrainer } from "./outbox/drainer.js"
 import { createOutboxWriter } from "./outbox/writer.js"
@@ -82,7 +83,14 @@ async function main() {
 		})
 	}
 
-	const router = createRouter({ client, sessions, adapters, config, logger })
+	const router = createRouter({
+		client,
+		sessions,
+		adapters,
+		config,
+		logger,
+		timeoutMs: config.router.timeoutMs,
+	})
 
 	// Start all adapters with the router handler
 	for (const [id, adapter] of adapters) {
@@ -112,12 +120,28 @@ async function main() {
 		})
 	}
 
+	// --- Phase 7: Health Server ---
+	if (config.health?.enabled) {
+		const health = createHealthServer({
+			port: config.health.port,
+			adapters,
+			memory,
+			outbox: config.outbox,
+			logger,
+		})
+		health.start()
+		onShutdown(() => {
+			health.stop()
+		})
+	}
+
 	logger.info("opencode-claw ready", {
 		channels: Object.entries(config.channels)
 			.filter(([_, v]) => v?.enabled)
 			.map(([k]) => k),
 		memory: config.memory.backend,
 		cron: config.cron?.enabled ?? false,
+		health: config.health?.enabled ?? false,
 	})
 }
 

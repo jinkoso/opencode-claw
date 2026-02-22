@@ -11,6 +11,7 @@ type RouterDeps = {
 	adapters: Map<ChannelId, ChannelAdapter>
 	config: Config
 	logger: Logger
+	timeoutMs: number
 }
 
 function allowlist(config: Config, channel: ChannelId): string[] | undefined {
@@ -147,11 +148,31 @@ async function routeMessage(msg: InboundMessage, deps: RouterDeps): Promise<void
 
 	deps.logger.debug("router: prompting session", { sessionId, channel: msg.channel })
 
-	// Send prompt to OpenCode (synchronous — waits for completion)
-	const result = await deps.client.session.prompt({
-		path: { id: sessionId },
-		body: { parts: [{ type: "text", text: msg.text }] },
-	})
+	const controller = new AbortController()
+	const timer = setTimeout(() => controller.abort(), deps.timeoutMs)
+
+	let result: Awaited<ReturnType<typeof deps.client.session.prompt>>
+	try {
+		result = await deps.client.session.prompt({
+			path: { id: sessionId },
+			body: { parts: [{ type: "text", text: msg.text }] },
+		})
+	} catch (err) {
+		clearTimeout(timer)
+		if (controller.signal.aborted) {
+			deps.logger.warn("router: session prompt timed out", {
+				sessionId,
+				timeoutMs: deps.timeoutMs,
+			})
+			await adapter.send(msg.peerId, {
+				text: "Request timed out. The agent took too long to respond.",
+				replyToId: msg.replyToId,
+			})
+			return
+		}
+		throw err
+	}
+	clearTimeout(timer)
 
 	if (!result.data) {
 		deps.logger.error("router: prompt returned no data", { sessionId })

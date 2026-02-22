@@ -1,6 +1,7 @@
 import { Bot } from "grammy"
 import type { TelegramConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
+import { createReconnector } from "../utils/reconnect.js"
 import type {
 	ChannelAdapter,
 	ChannelStatus,
@@ -13,13 +14,27 @@ export function createTelegramAdapter(config: TelegramConfig, logger: Logger): C
 	let state: ChannelStatus = "disconnected"
 	let handler: InboundMessageHandler | undefined
 
+	const reconnector = createReconnector({
+		name: "telegram",
+		logger,
+		connect: async () => {
+			state = "connecting"
+			bot.start({
+				onStart: () => {
+					state = "connected"
+					reconnector.reset()
+					logger.info("telegram: bot connected")
+				},
+			})
+		},
+	})
+
 	bot.on("message:text", async (ctx) => {
 		if (!handler) return
 		if (!ctx.from) return
 
 		const peerId = String(ctx.from.id)
 
-		// Allowlist check at adapter level (early exit before normalization)
 		if (config.allowlist.length > 0 && !config.allowlist.includes(peerId)) {
 			if (config.rejectionBehavior === "reject") {
 				await ctx.reply("This assistant is private.")
@@ -42,9 +57,9 @@ export function createTelegramAdapter(config: TelegramConfig, logger: Logger): C
 	})
 
 	bot.catch((err) => {
-		logger.error("telegram: bot error", {
-			error: err.message,
-		})
+		logger.error("telegram: bot error", { error: err.message })
+		state = "error"
+		reconnector.attempt()
 	})
 
 	return {
@@ -56,7 +71,6 @@ export function createTelegramAdapter(config: TelegramConfig, logger: Logger): C
 			state = "connecting"
 			logger.info("telegram: starting bot (polling mode)")
 
-			// Start polling in background — bot.start() is blocking
 			bot.start({
 				onStart: () => {
 					state = "connected"
@@ -66,6 +80,7 @@ export function createTelegramAdapter(config: TelegramConfig, logger: Logger): C
 		},
 
 		async stop() {
+			reconnector.stop()
 			state = "disconnected"
 			await bot.stop()
 			logger.info("telegram: bot stopped")

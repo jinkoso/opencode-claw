@@ -58,6 +58,13 @@
     "pollIntervalMs": 500,
     "maxAttempts": 3
   },
+  "router": {
+    "timeoutMs": 300000
+  },
+  "health": {
+    "enabled": false,
+    "port": 9090
+  },
   "log": {
     "level": "info"
   }

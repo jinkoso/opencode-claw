@@ -101,4 +101,15 @@ export const configSchema = z.object({
 			file: z.string().optional(),
 		})
 		.default({}),
+	health: z
+		.object({
+			enabled: z.boolean().default(false),
+			port: z.number().int().min(1).default(9090),
+		})
+		.optional(),
+	router: z
+		.object({
+			timeoutMs: z.number().int().min(1000).default(300_000),
+		})
+		.default({}),
 })
