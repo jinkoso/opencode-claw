@@ -1,8 +1,10 @@
+import { resolve } from "node:path"
 import { createOpencode } from "@opencode-ai/sdk"
 import { createRouter } from "./channels/router.js"
 import { createTelegramAdapter } from "./channels/telegram.js"
 import type { ChannelAdapter, ChannelId } from "./channels/types.js"
 import { loadConfig } from "./config/loader.js"
+import { createMemoryBackend } from "./memory/factory.js"
 import { createSessionManager } from "./sessions/manager.js"
 import { loadSessionMap } from "./sessions/persistence.js"
 import { createLogger } from "./utils/logger.js"
@@ -14,10 +16,21 @@ async function main() {
 
 	logger.info("opencode-claw starting", { version: "0.1.0" })
 
-	// Start OpenCode server + client
-	logger.info("opencode: starting server...")
+	// --- Phase 3: Memory System ---
+	const memory = createMemoryBackend(config.memory)
+	await memory.initialize()
+	logger.info("memory: initialized", { backend: config.memory.backend })
+
+	onShutdown(async () => {
+		await memory.close()
+	})
+
+	// Start OpenCode server + client with memory plugin
+	const pluginPath = `file://${resolve("./src/memory/plugin-entry.ts")}`
+	logger.info("opencode: starting server...", { plugins: [pluginPath] })
 	const { client, server } = await createOpencode({
 		port: config.opencode.port,
+		config: { plugin: [pluginPath] },
 	})
 	logger.info("opencode: server ready")
 
@@ -59,7 +72,7 @@ async function main() {
 		await adapter.start(router.handler)
 	}
 
-	// TODO Phase 3: register memory plugin
+	// Phase 3 memory: wired above via plugin
 	// TODO Phase 5: start cron scheduler
 	// TODO Phase 5: start outbox drainer
 
