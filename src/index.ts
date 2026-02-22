@@ -1,10 +1,13 @@
 import { resolve } from "node:path"
 import { createOpencode } from "@opencode-ai/sdk"
 import { createRouter } from "./channels/router.js"
+import { createSlackAdapter } from "./channels/slack.js"
 import { createTelegramAdapter } from "./channels/telegram.js"
 import type { ChannelAdapter, ChannelId } from "./channels/types.js"
+import { createWhatsAppAdapter } from "./channels/whatsapp.js"
 import { loadConfig } from "./config/loader.js"
 import { createMemoryBackend } from "./memory/factory.js"
+import { createOutboxDrainer } from "./outbox/drainer.js"
 import { createSessionManager } from "./sessions/manager.js"
 import { loadSessionMap } from "./sessions/persistence.js"
 import { createLogger } from "./utils/logger.js"
@@ -61,8 +64,21 @@ async function main() {
 		})
 	}
 
-	// TODO Phase 4: Slack adapter
-	// TODO Phase 4: WhatsApp adapter
+	if (config.channels.slack?.enabled) {
+		const slack = createSlackAdapter(config.channels.slack, logger)
+		adapters.set("slack", slack)
+		onShutdown(async () => {
+			await slack.stop()
+		})
+	}
+
+	if (config.channels.whatsapp?.enabled) {
+		const whatsapp = createWhatsAppAdapter(config.channels.whatsapp, logger)
+		adapters.set("whatsapp", whatsapp)
+		onShutdown(async () => {
+			await whatsapp.stop()
+		})
+	}
 
 	const router = createRouter({ client, sessions, adapters, config, logger })
 
@@ -72,9 +88,15 @@ async function main() {
 		await adapter.start(router.handler)
 	}
 
-	// Phase 3 memory: wired above via plugin
+	// --- Phase 4: Outbox ---
+	// TODO Phase 5: outbox writer will be used by cron scheduler
+	const drainer = createOutboxDrainer(config.outbox, adapters, logger)
+	drainer.start()
+	onShutdown(() => {
+		drainer.stop()
+	})
+
 	// TODO Phase 5: start cron scheduler
-	// TODO Phase 5: start outbox drainer
 
 	logger.info("opencode-claw ready", {
 		channels: Object.entries(config.channels)
