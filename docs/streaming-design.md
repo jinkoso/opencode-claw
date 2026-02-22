@@ -1,8 +1,9 @@
 # Streaming & Progress Reporting — Technical Design
 
-**Status**: Proposal  
+**Status**: Implemented  
 **Date**: 2026-02-22  
 **Author**: Engineering  
+**Commit**: `ed382e6`  
 **Supersedes**: Section 1.5 constraint "Never stream partial replies" in `tech-design.md`
 
 ---
@@ -15,21 +16,19 @@
 4. [Discovery: Channel Capabilities](#4-discovery-channel-capabilities)
 5. [Design Overview](#5-design-overview)
 6. [Type Changes](#6-type-changes)
-7. [Router Rewrite: Event-Driven Prompting](#7-router-rewrite-event-driven-prompting)
-8. [Channel Adapter Changes](#8-channel-adapter-changes)
-9. [Cron Scheduler Changes](#9-cron-scheduler-changes)
+7. [New Module: `src/sessions/prompt.ts`](#7-new-module-srcsessionspromptts)
+8. [Router Rewrite: `src/channels/router.ts`](#8-router-rewrite-srcchannelsrouterts)
+9. [Channel Adapter Changes](#9-channel-adapter-changes)
 10. [Configuration](#10-configuration)
 11. [Error Handling](#11-error-handling)
-12. [Implementation Phases](#12-implementation-phases)
-13. [Open Questions](#13-open-questions)
 
 ---
 
 ## 1. Problem Statement
 
-When a user sends a message through a channel (Telegram, Slack, WhatsApp), the current router calls `client.session.prompt()` — a blocking RPC that waits for the OpenCode agent to finish its entire reasoning + tool-use cycle before returning. This takes 10 seconds to 5 minutes depending on task complexity.
+When a user sends a message through a channel (Telegram, Slack, WhatsApp), the original router called `client.session.prompt()` — a blocking RPC that waited for the OpenCode agent to finish its entire reasoning + tool-use cycle before returning. This takes 10 seconds to 5 minutes depending on task complexity.
 
-During this time the user sees **nothing**. No typing indicator, no progress signal, no partial output. The only outcomes today are:
+During this time the user saw **nothing**. No typing indicator, no progress signal, no partial output. The only outcomes were:
 
 1. Full response after N seconds/minutes of silence
 2. "Request timed out" after 5 minutes
@@ -37,7 +36,7 @@ During this time the user sees **nothing**. No typing indicator, no progress sig
 
 This is a poor experience. Users don't know if the system is working, stuck, or dead.
 
-### Current Flow (Blocking)
+### Previous Flow (Blocking)
 
 ```
 User sends message
@@ -59,42 +58,44 @@ User sends message
 ### Goals
 
 1. **Typing indicators** — Show platform-native "typing" or "composing" state immediately when processing begins
-2. **Tool activity signals** — Notify users when the agent starts using a tool ("🔧 Searching codebase...", "📝 Editing file...")
-3. **Streamed final response** — Deliver the agent's text response progressively by editing a placeholder message, rather than waiting for full completion
-4. **Graceful degradation** — If a channel doesn't support editing (WhatsApp), fall back to typing indicators + single final message
-5. **Cron visibility** — Extend the same mechanism to cron jobs, so job progress can be reported to the delivery channel
+2. **Tool activity signals** — Notify users when the agent starts using a tool ("🔧 Searching codebase...", "🔧 Editing file...")
+3. **Heartbeat** — Send a "still working" message after extended silence, so users know the agent hasn't stalled
+4. **Question forwarding** — When the agent asks a clarifying question, send it to the user and wait for their reply before continuing
+5. **Graceful degradation** — If a channel doesn't support a given capability (e.g. Slack has no bot typing API), silently skip it
 
 ### Non-Goals
 
 - Multi-user / concurrent session handling (still single-user)
+- Streaming or editing partial text responses (response is always a single complete message)
 - Streaming to channels that weren't configured (no new channel types)
 - Modifying OpenCode SDK internals
 - Real-time audio/video streaming
-- Per-word streaming (we stream per text-part update, not per token)
 
 ---
 
 ## 3. Discovery: SDK Capabilities
 
-Investigation of `@opencode-ai/sdk` revealed two APIs that change the architecture entirely:
+Investigation of `@opencode-ai/sdk` revealed APIs that change the architecture entirely. All files now import from `@opencode-ai/sdk/v2`.
 
 ### 3.1 `client.session.promptAsync()`
 
 A non-blocking alternative to `prompt()`. Fires the prompt and returns immediately without waiting for completion.
 
 ```typescript
-// Current (blocking — what we use today)
+// Previous (blocking)
 const result = await client.session.prompt({
   path: { id: sessionId },
   body: { parts: [{ type: "text", text: msg.text }] },
 })
 
-// New (non-blocking — returns immediately)
+// Current (non-blocking — returns immediately)
 await client.session.promptAsync({
-  path: { id: sessionId },
-  body: { parts: [{ type: "text", text: msg.text }] },
+  sessionID: sessionId,
+  parts: [{ type: "text", text: promptText }],
 })
 ```
+
+Note the v2 API shape: flat body fields, `sessionID` instead of `path: { id }`.
 
 ### 3.2 `client.event.subscribe()`
 
@@ -102,38 +103,50 @@ Opens an SSE connection that streams typed events as an `AsyncGenerator`:
 
 ```typescript
 const { stream } = await client.event.subscribe()
-for await (const event of stream) {
+for await (const raw of stream) {
+  const event = raw as Event
   // event is a discriminated union on event.type
 }
 ```
+
+The stream must be explicitly closed after use: `await stream.return(undefined)`.
 
 ### 3.3 Event Types (Relevant Subset)
 
 | Event Type | Payload | Use Case |
 |---|---|---|
-| `session.status` | `{ sessionID, status: "busy" \| "idle" \| { type: "retry", attempt, next } }` | Know when processing starts/ends |
 | `session.idle` | `{ sessionID }` | Terminal signal — agent is done |
 | `session.error` | `{ sessionID, error }` | Error handling |
-| `message.part.updated` | `{ sessionID, part: Part }` | Text chunks, tool state changes |
-| `message.part.delta` | `{ sessionID, messageID, partID, field, delta }` | Incremental text deltas (v2 only) |
-| `todo.updated` | `{ sessionID, todos[] }` | Agent's internal task list changed |
+| `message.part.updated` | `{ part: Part }` | Tool state changes, text accumulation |
+| `message.part.delta` | `{ sessionID, partID, delta }` | Incremental text deltas (v2) |
+| `question.asked` | `QuestionRequest` | Agent needs a user answer before continuing |
 
 ### 3.4 Part Types (via `message.part.updated`)
 
 | Part Type | What It Means |
 |---|---|
-| `TextPart` | Agent's text response — `{ type: "text", text: string }` |
-| `ToolPart` | Tool invocation — `{ type: "tool", tool: string, state: pending \| running \| completed \| error }` |
-| `ReasoningPart` | Internal reasoning (not shown to users) |
-| `StepStartPart` / `StepFinishPart` | Agent execution steps |
-| `AgentPart` | Sub-agent delegation |
-| `RetryPart` | Provider retry in progress |
+| `TextPart` | Agent's text response — `{ type: "text", text: string, id: string }` |
+| `ToolPart` | Tool invocation — `{ type: "tool", tool: string, callID: string, state: { status, title? } }` |
 
-The `ToolPart.state` transitions are particularly useful:
+The `ToolPart.state.status` transitions are:
 ```
 pending → running (has title, e.g. "Reading file src/index.ts")
-        → completed (has output, title)
-        → error (has error string)
+        → completed
+        → error
+```
+
+### 3.5 `client.question.reply()` and `client.question.reject()`
+
+When a `question.asked` event arrives, the agent is paused waiting for an answer. Reply with:
+
+```typescript
+await client.question.reply({
+  requestID: request.id,
+  answers,   // Array<Array<string>> — one array per question
+})
+
+// Or reject (agent will continue without the answer):
+await client.question.reject({ requestID: request.id })
 ```
 
 ---
@@ -142,17 +155,15 @@ pending → running (has title, e.g. "Reading file src/index.ts")
 
 | Capability | Telegram | Slack | WhatsApp |
 |---|---|---|---|
-| **Typing indicator** | `bot.api.sendChatAction(peerId, "typing")` — 5s TTL, must re-send | `app.client.assistant.threads.setStatus(...)` or presence | `sock.sendPresenceUpdate("composing", jid)` |
-| **Stop typing** | Expires automatically (5s) | `setStatus({ status: "" })` | `sock.sendPresenceUpdate("paused", jid)` |
-| **Edit message** | `bot.api.editMessageText(peerId, msgId, text)` | `app.client.chat.update({ channel, ts, text })` | **Not supported** — protocol limitation |
-| **Delete message** | `bot.api.deleteMessage(peerId, msgId)` | `app.client.chat.delete({ channel, ts })` | Delete-for-self only |
-| **Reactions** | Bots cannot react | `app.client.reactions.add(...)` | `sock.sendMessage(jid, { react: { text, key } })` |
+| **Typing indicator** | `bot.api.sendChatAction(peerId, "typing")` — 5s TTL, must re-send | No bot typing API | `sock.sendPresenceUpdate("composing", jid)` |
+| **Stop typing** | Expires automatically (5s) | N/A | `sock.sendPresenceUpdate("paused", jid)` |
+| **Edit message** | Supported | Supported | **Not supported** — protocol limitation |
 
 ### Key Constraints
 
-- **Telegram typing** has a 5-second TTL. Must be re-sent in a loop while the agent is working.
-- **WhatsApp cannot edit messages**. Our streaming strategy must degrade gracefully: use typing indicators only, then deliver the full response as a single message.
-- **Slack** has the richest API: editable messages, reactions, and thread status. It gets the best experience.
+- **Telegram typing** has a 5-second TTL. The router re-sends it on the heartbeat callback to keep it alive during long operations.
+- **Slack** has no general bot typing API. `sendTyping` is a no-op (method not implemented on the adapter, treated as unsupported). The heartbeat message ("⏳ Still working...") serves as the only progress signal.
+- **WhatsApp** supports `composing`/`paused` presence updates via Baileys, but cannot edit messages.
 
 ---
 
@@ -168,30 +179,43 @@ User sends message
   ├─ resolveSession (~100-500ms)
   │
   ├─ adapter.sendTyping(peerId)            ← IMMEDIATE feedback
-  ├─ client.event.subscribe()               ← open SSE stream
-  ├─ client.session.promptAsync(...)         ← fire-and-forget
+  ├─ promptStreaming(client, sessionId, ...)
+  │     ├─ client.event.subscribe()        ← open SSE stream
+  │     ├─ client.session.promptAsync(...) ← fire-and-forget
+  │     │
+  │     └─ for await (event of stream)
+  │           ├─ tool running  → onToolRunning() → "🔧 {title}..."
+  │           ├─ question.asked → onQuestion() → send to user, wait for reply
+  │           ├─ heartbeat timer → onHeartbeat() → "⏳ Still working..."
+  │           ├─ session.idle  → break, return accumulated text
+  │           └─ session.error → throw
   │
-  ├─ for await (event of stream)            ← STREAM events
-  │     ├─ tool running  → adapter.sendProgress("🔧 Searching...") 
-  │     ├─ text updated  → adapter.editMessage(handle, partialText)
-  │     ├─ session.idle  → break
-  │     └─ session.error → handle error, break
-  │
-  └─ adapter.stopTyping(peerId)             ← cleanup
+  ├─ adapter.send(reply)                   ← single complete message
+  └─ adapter.stopTyping(peerId)            ← cleanup
 ```
 
-### 5.2 Three Feedback Layers
+### 5.2 Three Progress Mechanisms
 
-The design provides three layers of feedback, each degrading gracefully per channel:
+**Typing indicators**
+Platform-native "composing" signals. Sent immediately when processing starts, refreshed on heartbeat, cleared on completion. Slack has no equivalent and skips this silently.
 
-**Layer 1 — Typing Indicators (all channels)**
-Platform-native "composing" signals. Started immediately, maintained on an interval, cleared on completion.
+**Tool activity messages**
+Short progress messages when the agent invokes a tool: "🔧 Reading file src/config.ts...". Sent as new messages (works on all channels). Rate-limited to max one per `toolThrottleMs` (default 5 seconds). Each unique `callID` is only notified once, so a tool that updates its state multiple times doesn't spam.
 
-**Layer 2 — Tool Activity Messages (all channels)**
-Short progress messages when the agent invokes a tool: "🔧 Reading file src/config.ts". Sent as new messages (not edits) so they work on WhatsApp. Rate-limited to avoid spam.
+**Heartbeat**
+After `heartbeatMs` of silence (default 60 seconds), sends "⏳ Still working..." and re-sends the typing indicator. Resets every time tool activity is reported.
 
-**Layer 3 — Streamed Text Response (Telegram + Slack only)**
-A placeholder message ("⏳ Thinking...") is sent immediately. As `TextPart` updates arrive, the placeholder is edited in-place with the growing response. WhatsApp skips this layer (no message editing) and delivers the full response as a single message at the end.
+### 5.3 Question Forwarding
+
+When the agent asks a clarifying question (`question.asked` event), the router:
+
+1. Formats the question with options and sends it to the user
+2. Suspends `promptStreaming` while waiting for the user's next message
+3. The router's `pendingQuestions` map resolves the waiting promise when the next inbound message arrives
+4. The answer is forwarded to `client.question.reply()`
+5. If the user doesn't respond within `timeoutMs`, the question is rejected and the agent continues
+
+The final response is always delivered as a single complete message after `session.idle`.
 
 ---
 
@@ -199,445 +223,281 @@ A placeholder message ("⏳ Thinking...") is sent immediately. As `TextPart` upd
 
 ### 6.1 `src/channels/types.ts`
 
-```typescript
-// New: handle returned from send/sendProgress for later editing
-export type MessageHandle = {
-  id: string       // platform message ID (message_id, ts, key.id)
-  peerId: string
-  channel: ChannelId
-}
+`send()` remains `Promise<void>` — no `MessageHandle` needed since we never edit messages.
 
-// Updated: send() returns a handle instead of void
+Two optional methods were added to `ChannelAdapter`:
+
+```typescript
 export type ChannelAdapter = {
   readonly id: ChannelId
   readonly name: string
   start(handler: InboundMessageHandler): Promise<void>
   stop(): Promise<void>
-  send(peerId: string, message: OutboundMessage): Promise<MessageHandle>
+  send(peerId: string, message: OutboundMessage): Promise<void>
   status(): ChannelStatus
 
-  // New optional methods — undefined means unsupported
-  sendTyping?(peerId: string, threadId?: string): Promise<void>
-  stopTyping?(peerId: string, threadId?: string): Promise<void>
-  editMessage?(handle: MessageHandle, text: string): Promise<void>
+  // Optional — undefined means unsupported on this channel
+  sendTyping?(peerId: string): Promise<void>
+  stopTyping?(peerId: string): Promise<void>
 }
 ```
 
-**Breaking change**: `send()` returns `Promise<MessageHandle>` instead of `Promise<void>`. All existing call sites (router, outbox drainer, command handler) must be updated.
+The router checks for presence before calling: `if (adapter.sendTyping) { ... }`.
 
-### 6.2 Event Filtering Types
+---
+
+## 7. New Module: `src/sessions/prompt.ts`
+
+All event-loop logic is extracted into a single reusable function, keeping the router thin.
+
+### 7.1 Types
 
 ```typescript
-// src/channels/router.ts (internal to router module)
-type SessionEventFilter = {
-  sessionId: string
-  onToolRunning: (toolName: string, title?: string) => void
-  onTextUpdated: (text: string) => void
-  onIdle: () => void
-  onError: (error: string) => void
+export type ToolProgressCallback = (tool: string, title: string) => Promise<void>
+export type HeartbeatCallback = () => Promise<void>
+export type QuestionCallback = (question: QuestionRequest) => Promise<Array<Array<string>>>
+
+export type ProgressOptions = {
+  onToolRunning?: ToolProgressCallback
+  onHeartbeat?: HeartbeatCallback
+  onQuestion?: QuestionCallback
+  toolThrottleMs?: number
+  heartbeatMs?: number
 }
+```
+
+### 7.2 `promptStreaming()`
+
+```typescript
+export async function promptStreaming(
+  client: OpencodeClient,
+  sessionId: string,
+  promptText: string,
+  timeoutMs: number,
+  logger: Logger,
+  progress?: ProgressOptions,
+): Promise<string>
+```
+
+Returns the full agent response text as a single string. The caller sends it as one message.
+
+**Internals:**
+
+- Opens `client.event.subscribe()` **before** firing `promptAsync`, so no events are missed
+- Accumulates `TextPart` text via `message.part.delta` (incremental deltas) and `message.part.updated` (full snapshots). Multiple text parts are joined in order
+- Tool notifications: checks `!notifiedTools.has(part.callID)` to deduplicate, then checks `now - lastToolNotifyTime >= toolThrottleMs` for rate limiting
+- Heartbeat: a `setInterval` fires every `heartbeatMs`. It checks elapsed time since last activity — if over the threshold, calls `onHeartbeat()` and resets the clock
+- Question handling: calls `onQuestion(request)` and `await`s the result before calling `client.question.reply()`. On any error, calls `client.question.reject()`
+- Timeout: `AbortController` + `setTimeout(abort, timeoutMs)`. Checked on each event loop iteration
+- Cleanup in `finally`: clears timeout, clears heartbeat interval, calls `stream.return(undefined)`
+
+### 7.3 Event Filtering
+
+All events are global across all sessions. Every handler checks `sessionID` before processing:
+
+```typescript
+if (part.sessionID !== sessionId) continue
+if (event.properties.sessionID !== sessionId) continue
 ```
 
 ---
 
-## 7. Router Rewrite: Event-Driven Prompting
+## 8. Router Rewrite: `src/channels/router.ts`
 
-### 7.1 Core Loop
+### 8.1 Active Streams and Pending Questions
 
-The `routeMessage` function in `src/channels/router.ts` is the primary change site. The blocking `await client.session.prompt()` (lines 151–174) is replaced with:
+The router maintains two module-level maps:
 
 ```typescript
-async function routeMessage(msg: InboundMessage, deps: RouterDeps): Promise<void> {
-  const adapter = deps.adapters.get(msg.channel)
-  if (!adapter) return
+// sessionId currently streaming for each channel:peerId pair
+const activeStreams = new Map<string, string>()
 
-  // ... allowlist check, command interception (unchanged) ...
+// pending question resolvers — user's next message resolves the promise
+const pendingQuestions = new Map<string, QuestionResolver>()
+```
 
-  const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
-  const sessionId = await deps.sessions.resolveSession(key)
+`peerKey(channel, peerId)` returns `"telegram:12345"` etc. as the map key.
 
-  // Layer 1: Immediate typing indicator
-  const typingInterval = startTypingLoop(adapter, msg.peerId, msg.threadId)
+### 8.2 Inbound Message Routing
 
-  // Open SSE event stream
-  const { stream } = await deps.client.event.subscribe()
+Before routing any message to the agent, the handler checks `pendingQuestions`:
 
-  // Fire prompt (non-blocking)
-  await deps.client.session.promptAsync({
-    path: { id: sessionId },
-    body: { parts: [{ type: "text", text: msg.text }] },
-  })
+```typescript
+const pk = peerKey(msg.channel, msg.peerId)
+const pending = pendingQuestions.get(pk)
+if (pending) {
+  clearTimeout(pending.timeout)
+  pendingQuestions.delete(pk)
+  pending.resolve(msg.text)
+  return   // this message was an answer, not a new prompt
+}
+```
 
-  // Layer 2 + 3: Process events until idle/error
-  let placeholderHandle: MessageHandle | undefined
-  let lastText = ""
-  let lastProgressTime = 0
+This intercepts the user's reply to an agent question before it reaches `routeMessage`.
 
-  try {
-    const timeout = createTimeout(deps.timeoutMs)
+### 8.3 Core Prompt Flow
 
-    for await (const event of stream) {
-      if (timeout.expired) {
-        await adapter.send(msg.peerId, {
-          text: "Request timed out. The agent took too long to respond.",
-          replyToId: msg.replyToId,
-        })
-        break
-      }
+```typescript
+// 1. Typing indicator — immediate feedback
+if (adapter.sendTyping) {
+  await adapter.sendTyping(msg.peerId).catch(() => {})
+}
 
-      // Filter: only events for our session
-      if (!isOurSession(event, sessionId)) continue
+// 2. Build progress options (if enabled)
+const progress: ProgressOptions | undefined = progressEnabled ? {
+  onToolRunning: (_tool, title) =>
+    adapter.send(msg.peerId, { text: `🔧 ${title}...` }),
+  onHeartbeat: async () => {
+    if (adapter.sendTyping) await adapter.sendTyping(msg.peerId).catch(() => {})
+    await adapter.send(msg.peerId, { text: "⏳ Still working..." })
+  },
+  onQuestion: async (request) => {
+    await adapter.send(msg.peerId, { text: formatQuestion(request) })
+    const userReply = await waitForUserReply(deps.timeoutMs)
+    return request.questions.map(() => [userReply])
+  },
+  toolThrottleMs: deps.config.router.progress.toolThrottleMs,
+  heartbeatMs: deps.config.router.progress.heartbeatMs,
+} : undefined
 
-      if (event.type === "message.part.updated") {
-        const part = event.properties.part
+// 3. Run
+const reply = await promptStreaming(deps.client, sessionId, msg.text, deps.timeoutMs, deps.logger, progress)
 
-        // Tool activity → progress message (rate-limited)
-        if (part.type === "tool" && part.state.status === "running") {
-          const now = Date.now()
-          if (now - lastProgressTime >= deps.progressThrottleMs) {
-            lastProgressTime = now
-            const label = part.state.title ?? part.tool
-            adapter.send(msg.peerId, { text: `🔧 ${label}` }).catch(() => {})
-          }
+// 4. Deliver complete response
+await adapter.send(msg.peerId, { text: reply, replyToId: msg.replyToId })
+```
+
+Cleanup runs in `finally`: removes from `activeStreams`, removes from `pendingQuestions`, calls `adapter.stopTyping`.
+
+### 8.4 Question Formatting
+
+```typescript
+function formatQuestion(request: QuestionRequest): string {
+  const lines: string[] = ["❓ The agent has a question:"]
+  for (const q of request.questions) {
+    lines.push("")
+    if (q.header) lines.push(`**${q.header}**`)
+    lines.push(q.question)
+    if (q.options && q.options.length > 0) {
+      for (let i = 0; i < q.options.length; i++) {
+        const opt = q.options[i]
+        if (opt) {
+          lines.push(`  ${i + 1}. ${opt.label}${opt.description ? ` — ${opt.description}` : ""}`)
         }
-
-        // Text part → streamed response (edit placeholder)
-        if (part.type === "text" && part.text !== lastText) {
-          lastText = part.text
-          if (adapter.editMessage && placeholderHandle) {
-            await adapter.editMessage(placeholderHandle, part.text)
-          } else if (!placeholderHandle) {
-            // First text: send as new message (becomes placeholder on edit-capable channels)
-            placeholderHandle = await adapter.send(msg.peerId, {
-              text: part.text,
-              replyToId: msg.replyToId,
-            })
-          }
-          // If no editMessage support: do nothing until final
-        }
-      }
-
-      if (event.type === "session.idle") break
-      if (event.type === "session.error") {
-        await adapter.send(msg.peerId, { text: "Error: agent encountered an issue." })
-        break
       }
     }
-
-    // Final delivery: send full text if we haven't been editing
-    // or if channel doesn't support editing (WhatsApp)
-    if (lastText && !adapter.editMessage) {
-      await adapter.send(msg.peerId, { text: lastText, replyToId: msg.replyToId })
-    } else if (lastText && placeholderHandle && adapter.editMessage) {
-      // Ensure final state is synced
-      await adapter.editMessage(placeholderHandle, lastText)
-    } else if (!lastText) {
-      await adapter.send(msg.peerId, { text: "(empty response)", replyToId: msg.replyToId })
-    }
-  } finally {
-    clearTypingLoop(typingInterval)
-    adapter.stopTyping?.(msg.peerId, msg.threadId).catch(() => {})
+    if (q.multiple) lines.push("(You can pick multiple — separate with commas)")
   }
+  lines.push("")
+  lines.push("Reply with your answer:")
+  return lines.join("\n")
 }
 ```
 
-### 7.2 Typing Loop Helper
+### 8.5 `/cancel` Command
 
-```typescript
-function startTypingLoop(
-  adapter: ChannelAdapter,
-  peerId: string,
-  threadId?: string,
-): ReturnType<typeof setInterval> | undefined {
-  if (!adapter.sendTyping) return undefined
-  // Send immediately, then every 4s (Telegram's indicator lasts 5s)
-  adapter.sendTyping(peerId, threadId).catch(() => {})
-  return setInterval(() => {
-    adapter.sendTyping!(peerId, threadId).catch(() => {})
-  }, 4_000)
-}
-
-function clearTypingLoop(interval: ReturnType<typeof setInterval> | undefined): void {
-  if (interval) clearInterval(interval)
-}
-```
-
-### 7.3 Session Event Filtering
-
-Events from `client.event.subscribe()` are global — they include events from all sessions. The router must filter to only the relevant session:
-
-```typescript
-function isOurSession(event: Event, sessionId: string): boolean {
-  if ("properties" in event && "sessionID" in event.properties) {
-    return event.properties.sessionID === sessionId
-  }
-  return false
-}
-```
-
-### 7.4 Timeout Handling
-
-The current `AbortController + setTimeout` pattern doesn't apply to `for await`. Replace with a simple deadline check:
-
-```typescript
-function createTimeout(ms: number) {
-  const deadline = Date.now() + ms
-  return { get expired() { return Date.now() >= deadline } }
-}
-```
-
-The stream itself is broken by returning from the loop. The SSE connection's cleanup is handled by the generator's `return()` method (called implicitly when the `for await` exits).
+`/cancel` calls `client.session.abort({ sessionID })` using the session ID from `activeStreams`. If the agent was mid-stream, `promptStreaming` throws `"aborted"` (from `MessageAbortedError` in `session.error`). The router catches this and returns silently — the `/cancel` command reply was already sent.
 
 ---
 
-## 8. Channel Adapter Changes
+## 9. Channel Adapter Changes
 
-### 8.1 Telegram (`src/channels/telegram.ts`)
+### 9.1 Telegram (`src/channels/telegram.ts`)
+
+`sendTyping` sends `sendChatAction("typing")`. The 5-second TTL is refreshed by the heartbeat callback in the router. No `stopTyping` is needed — the indicator expires on its own.
 
 ```typescript
-// send() — updated return type
-async send(peerId: string, message: OutboundMessage): Promise<MessageHandle> {
-  const result = await bot.api.sendMessage(Number(peerId), message.text, {
-    reply_parameters: message.replyToId
-      ? { message_id: Number(message.replyToId) }
-      : undefined,
-  })
-  return { id: String(result.message_id), peerId, channel: "telegram" }
-},
-
-// sendTyping() — new
 async sendTyping(peerId: string): Promise<void> {
   await bot.api.sendChatAction(Number(peerId), "typing")
 },
-
-// stopTyping() — Telegram auto-expires after 5s, explicit stop not needed
-// (omit method — undefined means "auto")
-
-// editMessage() — new
-async editMessage(handle: MessageHandle, text: string): Promise<void> {
-  await bot.api.editMessageText(Number(handle.peerId), Number(handle.id), text)
-},
 ```
 
-### 8.2 Slack (`src/channels/slack.ts`)
+`send()` remains `Promise<void>`.
+
+### 9.2 Slack (`src/channels/slack.ts`)
+
+No `sendTyping` or `stopTyping` methods. Slack has no bot typing API for regular apps. Progress is communicated via tool activity messages and the heartbeat message only.
+
+### 9.3 WhatsApp (`src/channels/whatsapp.ts`)
+
+Both `sendTyping` and `stopTyping` are implemented using Baileys presence updates:
 
 ```typescript
-// send() — updated return type
-async send(peerId: string, message: OutboundMessage): Promise<MessageHandle> {
-  const result = await app.client.chat.postMessage({
-    channel: peerId,
-    text: message.text,
-    thread_ts: message.threadId,
-  })
-  return { id: result.ts ?? "", peerId, channel: "slack" }
-},
-
-// sendTyping() — uses Slack's typing indicator
-async sendTyping(peerId: string, threadId?: string): Promise<void> {
-  // If using assistant threads API:
-  // await app.client.assistant.threads.setStatus({ channel_id: peerId, thread_ts: threadId, status: "is thinking..." })
-  // Fallback: Slack doesn't have a general typing indicator for bots.
-  // We rely on the placeholder message ("⏳ Thinking...") as a visual signal.
-},
-
-// editMessage() — new
-async editMessage(handle: MessageHandle, text: string): Promise<void> {
-  await app.client.chat.update({
-    channel: handle.peerId,
-    ts: handle.id,
-    text,
-  })
-},
-```
-
-### 8.3 WhatsApp (`src/channels/whatsapp.ts`)
-
-```typescript
-// send() — updated return type
-async send(peerId: string, message: OutboundMessage): Promise<MessageHandle> {
-  const jid = `${peerId}@s.whatsapp.net`
-  const result = await sock.sendMessage(jid, { text: message.text })
-  return { id: result?.key?.id ?? "", peerId, channel: "whatsapp" }
-},
-
-// sendTyping() — new
 async sendTyping(peerId: string): Promise<void> {
+  if (!sock) return
   const jid = `${peerId}@s.whatsapp.net`
   await sock.sendPresenceUpdate("composing", jid)
 },
 
-// stopTyping() — new
 async stopTyping(peerId: string): Promise<void> {
+  if (!sock) return
   const jid = `${peerId}@s.whatsapp.net`
   await sock.sendPresenceUpdate("paused", jid)
 },
-
-// editMessage — NOT implemented (WhatsApp protocol limitation)
-// Omitting the method signals the router to use send-once strategy
 ```
 
----
-
-## 9. Cron Scheduler Changes
-
-The cron scheduler (`src/cron/scheduler.ts`) has the same blocking `await client.session.prompt()` pattern. It benefits from the same streaming approach but with simpler requirements:
-
-- **No typing indicators** (cron jobs don't have an active chat to type in)
-- **No streamed editing** (results are enqueued to outbox, delivered once)
-- **Progress logging** (log tool usage for observability, but don't message the user mid-job)
-
-### Change: Replace `prompt()` with `promptAsync()` + event loop
-
-```typescript
-// Instead of:
-result = await deps.client.session.prompt({ ... })
-
-// Use:
-const { stream } = await deps.client.event.subscribe()
-await deps.client.session.promptAsync({ ... })
-
-let responseText = ""
-for await (const event of stream) {
-  if (timeout.expired) break
-  if (!isOurSession(event, sessionId)) continue
-
-  if (event.type === "message.part.updated" && event.properties.part.type === "text") {
-    responseText = event.properties.part.text
-  }
-  if (event.type === "session.idle") break
-  if (event.type === "session.error") break
-}
-
-// Then enqueue responseText to outbox (same as today)
-```
-
-This gives cron jobs the same timeout safety without the `AbortController` workaround, and opens the door for future progress reporting to channels.
+`stopTyping` is called in the router's `finally` block after the response is delivered.
 
 ---
 
 ## 10. Configuration
 
-### 10.1 New Config Schema (`src/config/schema.ts`)
+### 10.1 Schema (`src/config/schema.ts`)
 
 ```typescript
-// Add to routerSchema:
 router: z.object({
   timeoutMs: z.number().int().min(1000).default(300_000),
-  streaming: z.object({
+  progress: z.object({
     enabled: z.boolean().default(true),
-    showToolActivity: z.boolean().default(true),
-    toolActivityThrottleMs: z.number().int().min(1000).default(5_000),
-    editPlaceholder: z.boolean().default(true),
+    toolThrottleMs: z.number().int().min(1000).default(5_000),
+    heartbeatMs: z.number().int().min(10_000).default(60_000),
   }).default({}),
 }).default({}),
 ```
 
+### 10.2 Config Fields
+
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `streaming.enabled` | boolean | `true` | Master switch for event-driven prompting. When `false`, falls back to blocking `prompt()`. |
-| `streaming.showToolActivity` | boolean | `true` | Send progress messages when agent uses tools |
-| `streaming.toolActivityThrottleMs` | number | `5000` | Min ms between tool activity messages (prevent spam) |
-| `streaming.editPlaceholder` | boolean | `true` | Edit placeholder message with streamed text (on supported channels) |
+| `router.progress.enabled` | boolean | `true` | Master switch. When `false`, `promptStreaming` is called without progress options — no tool messages, no heartbeat, no question forwarding. |
+| `router.progress.toolThrottleMs` | number | `5000` | Min milliseconds between tool activity messages. Prevents spam on agents that use many tools quickly. |
+| `router.progress.heartbeatMs` | number | `60000` | Milliseconds of silence before sending "⏳ Still working..." and refreshing the typing indicator. |
 
-### 10.2 Fallback Mode
+### 10.3 Example Config
 
-When `streaming.enabled: false`, the router uses the current blocking `client.session.prompt()` path. This is a safety valve for:
-- SDK version incompatibility (if `promptAsync`/`event.subscribe` aren't available)
-- Debugging (simpler to reason about)
-- Users who prefer the current behavior
+```json
+{
+  "router": {
+    "timeoutMs": 300000,
+    "progress": {
+      "enabled": true,
+      "toolThrottleMs": 5000,
+      "heartbeatMs": 60000
+    }
+  }
+}
+```
 
 ---
 
 ## 11. Error Handling
 
-### 11.1 SSE Stream Errors
+### 11.1 Timeout
 
-The SDK's SSE client supports `onSseError` and automatic retries (`sseDefaultRetryDelay: 3000ms`, `sseMaxRetryAttempts`). If the stream disconnects:
+`promptStreaming` uses `AbortController` + `setTimeout`. On abort, it throws `new Error("timeout")`. The router catches this and sends "Request timed out. The agent took too long to respond."
 
-1. The SDK retries automatically (up to `sseMaxRetryAttempts`)
-2. If retries exhaust, the `for await` exits normally
-3. The router checks `lastText`: if non-empty, deliver what we have; if empty, send a timeout/error message
+### 11.2 `session.error`
 
-### 11.2 `promptAsync` Failures
+`MessageAbortedError` (from `/cancel`) throws `"aborted"` — router catches and returns silently. Other errors throw the error message string — router re-throws, the outer catch sends a generic error message.
 
-If `promptAsync` itself fails (network error, invalid session), it throws immediately before the event loop starts. Catch it and report to the user — same as the current `prompt()` error path.
+### 11.3 SSE Stream Disconnect
 
-### 11.3 Event Stream Filtering Misses
+If the stream exits without `session.idle` (agent crash, network drop), the `for await` loop ends naturally. `promptStreaming` returns whatever text was accumulated. If empty, the router sends `"(empty response)"`.
 
-If `session.idle` never arrives (agent process crash), the timeout deadline catches it. The stream loop exits, partial text (if any) is delivered, and the user gets a timeout message if no text was received.
+### 11.4 Question Timeout
 
-### 11.4 Race: Events Arrive Before Stream Opens
+If the user doesn't reply to an agent question within `timeoutMs`, `waitForUserReply` rejects with `"question_timeout"`. `promptStreaming` catches this and calls `client.question.reject()`, allowing the agent to continue or fail on its own.
 
-There's a small window between `event.subscribe()` and `promptAsync()` where we might miss early events. Mitigation: subscribe **before** firing the prompt. The SSE connection buffers events, so as long as we subscribe first, no events are lost.
+### 11.5 Race: Events Before Stream Opens
 
----
-
-## 12. Implementation Phases
-
-### Phase 1: Type Changes + Typing Indicators
-**Effort**: Small  
-**Risk**: Low
-
-1. Add `MessageHandle` type to `types.ts`
-2. Change `send()` return type to `Promise<MessageHandle>` across all adapters
-3. Update all `send()` call sites (router, outbox drainer, command handler) to handle the return value
-4. Add `sendTyping()` and `stopTyping()` to each adapter
-5. Add typing loop to router (before the existing `prompt()` call) — no streaming yet
-6. Test: verify typing indicators appear on each channel
-
-**Deliverable**: Users see typing indicators while the agent thinks. No other behavior change.
-
-### Phase 2: Event-Driven Prompting
-**Effort**: Medium  
-**Risk**: Medium (new async pattern)
-
-1. Add `streaming` section to config schema
-2. Replace `prompt()` with `promptAsync()` + `event.subscribe()` in router
-3. Implement session event filtering
-4. Implement timeout via deadline check
-5. Add tool activity messages (rate-limited)
-6. When `streaming.enabled: false`, preserve the old blocking path
-7. Test: verify agent responses still arrive correctly; verify tool activity messages
-
-**Deliverable**: Users see tool activity messages. Response delivery still happens once at the end (no editing yet).
-
-### Phase 3: Streamed Text via Message Editing
-**Effort**: Small  
-**Risk**: Low (editing is additive)
-
-1. Add `editMessage()` to Telegram and Slack adapters
-2. Router sends first text chunk as a new message, subsequent chunks edit it
-3. WhatsApp: no `editMessage`, router sends full text once at the end (graceful degradation)
-4. Test: verify progressive text updates on Telegram and Slack
-
-**Deliverable**: Full streaming experience. Users see text appear progressively on Telegram and Slack.
-
-### Phase 4: Cron Scheduler Update
-**Effort**: Small  
-**Risk**: Low
-
-1. Replace `prompt()` with `promptAsync()` + event loop in scheduler
-2. Log tool activity for observability
-3. Remove `AbortController` timeout in favor of deadline check
-4. Test: verify cron jobs still complete and deliver results
-
-**Deliverable**: Cron jobs use the same event-driven pattern. Consistent architecture.
-
----
-
-## 13. Open Questions
-
-1. **v1 vs v2 SDK API**: The v2 API adds `message.part.delta` for incremental text streaming. Should we target v2 from the start, or build on v1 and upgrade later? (v2 is at `@opencode-ai/sdk/v2`)
-
-2. **Slack typing indicator**: Slack's `assistant.threads.setStatus` requires the bot to be configured as a Slack Assistant. If the bot is a regular Slack app, there's no general typing indicator API. Should we document this as a requirement, or skip Slack typing entirely?
-
-3. **Tool activity message cleanup**: Should we delete tool activity messages after the final response is delivered (to avoid clutter)? Telegram and Slack support deletion. WhatsApp does not.
-
-4. **SSE connection lifecycle**: Should we maintain a single long-lived SSE connection shared across all prompts, or open/close one per `routeMessage` call? Single connection is more efficient but adds session-filtering complexity.
-
-5. **Rate limiting edits**: Telegram and Slack have rate limits on `editMessage`. How aggressively should we edit? Options:
-   - Every `message.part.updated` (could hit rate limits on fast agents)
-   - Throttled to once per N seconds (adds latency but is safe)
-   - On `StepFinishPart` boundaries only (natural breakpoints)
-
-6. **Partial text on timeout**: If the agent times out mid-response, should we deliver partial text? Current design says yes (deliver `lastText` if non-empty). But partial text might be mid-sentence or misleading.
+`client.event.subscribe()` is called **before** `client.session.promptAsync()`. This ensures no events are emitted before the stream is listening.

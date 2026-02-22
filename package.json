@@ -47,7 +47,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
+    "start": "bun run src/cli.ts",
     "build": "tsc --build",
     "prepublishOnly": "npm run build",
     "typecheck": "bun x tsc --noEmit",
@@ -58,12 +58,13 @@
     "test:e2e": "bun test test/"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "^1.2.10",
-    "@opencode-ai/plugin": "^1.2.10",
-    "grammy": "^1.35.0",
+    "@clack/prompts": "^1.0.1",
     "@grammyjs/runner": "^2.0.3",
+    "@opencode-ai/plugin": "^1.2.10",
+    "@opencode-ai/sdk": "^1.2.10",
     "@slack/bolt": "^4.3.0",
     "@whiskeysockets/baileys": "^6.7.16",
+    "grammy": "^1.35.0",
     "node-cron": "^3.0.3",
     "zod": "^3.24.0"
   },
