@@ -6,8 +6,10 @@ import { createTelegramAdapter } from "./channels/telegram.js"
 import type { ChannelAdapter, ChannelId } from "./channels/types.js"
 import { createWhatsAppAdapter } from "./channels/whatsapp.js"
 import { loadConfig } from "./config/loader.js"
+import { createCronScheduler } from "./cron/scheduler.js"
 import { createMemoryBackend } from "./memory/factory.js"
 import { createOutboxDrainer } from "./outbox/drainer.js"
+import { createOutboxWriter } from "./outbox/writer.js"
 import { createSessionManager } from "./sessions/manager.js"
 import { loadSessionMap } from "./sessions/persistence.js"
 import { createLogger } from "./utils/logger.js"
@@ -89,14 +91,26 @@ async function main() {
 	}
 
 	// --- Phase 4: Outbox ---
-	// TODO Phase 5: outbox writer will be used by cron scheduler
+	const outbox = createOutboxWriter(config.outbox)
 	const drainer = createOutboxDrainer(config.outbox, adapters, logger)
 	drainer.start()
 	onShutdown(() => {
 		drainer.stop()
 	})
 
-	// TODO Phase 5: start cron scheduler
+	// --- Phase 5: Cron ---
+	if (config.cron?.enabled) {
+		const scheduler = createCronScheduler({
+			client,
+			outbox,
+			config: config.cron,
+			logger,
+		})
+		scheduler.start()
+		onShutdown(() => {
+			scheduler.stop()
+		})
+	}
 
 	logger.info("opencode-claw ready", {
 		channels: Object.entries(config.channels)
