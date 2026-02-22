@@ -35,6 +35,14 @@
     "memory",
     "cron"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jinkoso/opencode-claw.git"
+  },
+  "homepage": "https://github.com/jinkoso/opencode-claw#readme",
+  "bugs": {
+    "url": "https://github.com/jinkoso/opencode-claw/issues"
+  },
   "engines": {
     "node": ">=20"
   },

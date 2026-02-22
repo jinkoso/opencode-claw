@@ -51,7 +51,7 @@ opencode-claw
 
 ```bash
 # 1. Create a config file in your project directory
-curl -O https://raw.githubusercontent.com/<owner>/opencode-claw/main/opencode-claw.example.json
+curl -O https://raw.githubusercontent.com/jinkoso/opencode-claw/main/opencode-claw.example.json
 mv opencode-claw.example.json opencode-claw.json
 
 # 2. Edit opencode-claw.json with your tokens and preferences

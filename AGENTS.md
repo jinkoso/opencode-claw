@@ -123,7 +123,7 @@ No other runtime dependencies. Keep it lean.
 ## Development Setup (from source)
 
 ```bash
-git clone <repo-url> opencode-claw
+git clone git@github.com:jinkoso/opencode-claw.git
 cd opencode-claw
 bun install
 
