@@ -32,31 +32,40 @@ OpenCode handles the hard parts: LLM routing, tool execution, session state, fil
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) >= 1.1
+- [Node.js](https://nodejs.org) >= 20
 - [OpenCode](https://opencode.ai) installed and configured (`opencode` binary in `PATH`)
 - At least one channel configured (Telegram bot token, Slack app token, or WhatsApp)
+
+## Installation
+
+```bash
+# Run directly (no install)
+npx opencode-claw
+
+# Or install globally
+npm install -g opencode-claw
+opencode-claw
+```
 
 ## Quick Start
 
 ```bash
-# Clone and install
-git clone <repo-url> opencode-claw
-cd opencode-claw
-bun install
+# 1. Create a config file in your project directory
+curl -O https://raw.githubusercontent.com/<owner>/opencode-claw/main/opencode-claw.example.json
+mv opencode-claw.example.json opencode-claw.json
 
-# Copy example config and edit
-cp opencode-claw.example.json opencode-claw.json
-# Edit opencode-claw.json with your tokens and preferences
+# 2. Edit opencode-claw.json with your tokens and preferences
+#    (see Configuration section below)
 
-# Run
-bun start
+# 3. Run
+npx opencode-claw
 ```
+
+The service starts an OpenCode server, connects your configured channels, initializes the memory system, and begins listening for messages.
 
 ## Configuration
 
-All configuration lives in `opencode-claw.json` at the project root. Environment variables can be referenced with `${VAR_NAME}` syntax and will be expanded at load time.
-
-See [`opencode-claw.example.json`](opencode-claw.example.json) for a fully annotated example.
+All configuration lives in `opencode-claw.json` in the current working directory. Environment variables can be referenced with `${VAR_NAME}` syntax and will be expanded at load time.
 
 ### OpenCode
 
@@ -250,53 +259,57 @@ These commands are available in any connected channel:
 
 Any non-command message is routed to the active OpenCode session as a prompt.
 
-## Project Structure
+## Programmatic API
 
+Use opencode-claw as a library in your own Node.js application:
+
+```typescript
+import { main, createMemoryBackend } from "opencode-claw"
+
+// Run the full service programmatically
+await main()
 ```
-src/
-  index.ts              Entry point — wires all subsystems
-  config/
-    schema.ts           Zod config schema
-    types.ts            TypeScript types derived from schema
-    loader.ts           Config loader with env var expansion
-  channels/
-    types.ts            ChannelAdapter interface
-    router.ts           Message router + command handler
-    telegram.ts         Telegram adapter (grammy)
-    slack.ts            Slack adapter (@slack/bolt)
-    whatsapp.ts         WhatsApp adapter (baileys)
-  memory/
-    types.ts            MemoryBackend interface
-    txt.ts              Text file memory backend
-    openviking.ts       OpenViking HTTP backend
-    factory.ts          Backend factory
-    plugin.ts           OpenCode plugin for memory tools
-    plugin-entry.ts     Plugin entry file loaded by OpenCode
-  sessions/
-    manager.ts          Session routing + lifecycle
-    persistence.ts      Session map file persistence
-  cron/
-    scheduler.ts        Cron job scheduler (node-cron)
-  outbox/
-    writer.ts           File-based message queue writer
-    drainer.ts          Queue drainer + dead-letter handling
-  health/
-    server.ts           HTTP health check server
-  utils/
-    logger.ts           Structured logger
-    shutdown.ts         Graceful shutdown handler
-    reconnect.ts        Exponential backoff reconnection
+
+### Exports
+
+| Export | Description |
+|--------|-------------|
+| `main()` | Start the full opencode-claw service |
+| `createMemoryBackend(config)` | Create a memory backend (txt or openviking) from config |
+| `createOutboxWriter(config)` | Create an outbox writer for queuing messages |
+| `createOutboxDrainer(config, channels)` | Create an outbox drainer for delivering queued messages |
+
+### Types
+
+All configuration and domain types are exported for TypeScript consumers:
+
+```typescript
+import type {
+  Config,
+  MemoryConfig,
+  MemoryBackend,
+  MemoryEntry,
+  ChannelAdapter,
+  ChannelId,
+  InboundMessage,
+  OutboundMessage,
+} from "opencode-claw"
 ```
+
+### Standalone Memory Plugin
+
+Use the memory plugin with a vanilla OpenCode installation (without the rest of opencode-claw):
+
+```typescript
+import { memoryPlugin } from "opencode-claw/plugin"
+```
+
+This registers `memory_search`, `memory_store`, and `memory_delete` tools, and injects relevant memories into the system prompt via a chat transform hook. Configure it by placing an `opencode-claw.json` with a `memory` section in your OpenCode project directory.
 
 ## Inspiration
 
 - **[OpenClaw](https://github.com/nichochar/openclaw)** -- Channel plugin architecture, session key routing, memory system design.
 - **[MonClaw](https://cefboud.com/posts/monclaw-a-light-openclaw-with-opencode-sdk/)** -- Outbox pattern, plugin-based memory injection, wrapping OpenCode SDK.
-
-## Design Docs
-
-- [`docs/investigation-report.md`](docs/investigation-report.md) -- Research synthesis of OpenCode, OpenClaw, OpenViking, and MonClaw.
-- [`docs/tech-design.md`](docs/tech-design.md) -- Full technical design: interfaces, types, config schema, project structure, implementation phases.
 
 ## License
 
