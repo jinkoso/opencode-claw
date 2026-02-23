@@ -451,6 +451,25 @@ The plugin registers `memory_search`, `memory_store`, `memory_delete`, `tenet_st
 
 > **Note**: You do not need the standalone plugin wiring when using `opencode-claw` directly — it is registered automatically on startup.
 
+## Testing
+
+```bash
+# Run all unit tests (fast, no server needed)
+bun test
+
+# Run unit tests + LLM-gated E2E tests (requires HuggingFace endpoint in config)
+TEST_WITH_LLM=1 bun test
+
+# Run the standalone compaction workflow test (no LLM, no OpenCode server)
+bun test/compaction-manual.ts
+```
+
+**Unit tests** (`test/memory/*.test.ts`) are fast and self-contained — no network, no running server required. Run them during development with `bun test`.
+
+**E2E tests** (`test/memory-plugin.e2e.test.ts`) require a running OpenCode server. Start one with `bun x opencode server` before running. Tests gated behind `TEST_WITH_LLM=1` make real LLM calls and require a configured HuggingFace endpoint.
+
+**Compaction test** (`test/compaction-manual.ts`) is a standalone script that exercises the full three-pass memory compaction workflow directly against the txt backend. Run with `bun test/compaction-manual.ts` — no server, no LLM, no config file needed.
+
 ## Inspiration
 
 - **[OpenClaw](https://github.com/nichochar/openclaw)** -- Channel plugin architecture, session key routing, memory system design.
