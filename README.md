@@ -244,6 +244,8 @@ Create a bot via [@BotFather](https://t.me/BotFather) and set the token. The `al
 
 #### Slack
 
+To connect a Slack bot, you'll need to create an app with Socket Mode enabled.
+
 ```json
 {
   "channels": {
@@ -257,7 +259,30 @@ Create a bot via [@BotFather](https://t.me/BotFather) and set the token. The `al
 }
 ```
 
-Requires a Slack app with Socket Mode enabled. The `appToken` is an app-level token (starts with `xapp-`), and `botToken` is the bot user OAuth token (starts with `xoxb-`). Optionally set `mode: "http"` with a `signingSecret` for HTTP-based event delivery.
+**Setup Guide:**
+
+1.  **Create App**: Go to [api.slack.com/apps](https://api.slack.com/apps) -> **Create New App** -> **From scratch**.
+2.  **Enable Socket Mode**:
+    -   Click **Socket Mode** in the sidebar.
+    -   Toggle **Enable Socket Mode**.
+    -   Generate an App-Level Token (name it `socket-token`).
+    -   Copy the `xapp-...` token. This is your **`appToken`**.
+3.  **Configure Events**:
+    -   Click **Event Subscriptions** in the sidebar.
+    -   Toggle **Enable Events**.
+    -   Subscribe to: `message.im` (DMs), `app_mention` (mentions).
+    -   *(Optional)*: `message.channels` (public channels), `message.groups` (private channels).
+    -   **Save Changes**.
+4.  **Configure Permissions**:
+    -   Click **OAuth & Permissions** in the sidebar.
+    -   Under **Bot Token Scopes**, add: `chat:write`, `im:history`.
+    -   Scroll up and click **Install to Workspace**.
+    -   Copy the `xoxb-...` token. This is your **`botToken`**.
+5.  **Enable Messages Tab**:
+    -   Click **App Home** in the sidebar.
+    -   Scroll down to **Show Tabs**.
+    -   Enable the **Messages Tab** toggle.
+    -   **CRITICAL**: Check the box **"Allow users to send Slash commands and messages from the messages tab"**. Without this, the bot cannot receive DMs.
 
 #### WhatsApp
 
