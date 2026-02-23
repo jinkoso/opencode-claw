@@ -53,7 +53,7 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "build": "tsc --build",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run test && npm run build",
     "typecheck": "bun x tsc --noEmit",
     "typecheck:test": "bun x tsc --noEmit -p tsconfig.test.json",
     "lint": "bun x biome check src/ test/",
