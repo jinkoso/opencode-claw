@@ -45,8 +45,11 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		const channelId = "channel" in message ? (message.channel as string) : undefined
 		if (!channelId) return
 
+		const isDm = channelId.startsWith("D")
+		const requireMention = isDm ? config.requireMentionInDms : config.requireMentionInChannels
+
 		// In channels (not DMs), only reply if mentioned
-		if (!channelId.startsWith("D")) {
+		if (requireMention) {
 			if (!botUserId) {
 				// Should not happen if started correctly
 				const auth = await app.client.auth.test()

@@ -17,6 +17,8 @@ const slackSchema = z.object({
 	mode: z.enum(["socket", "http"]).default("socket"),
 	signingSecret: z.string().optional(),
 	rejectionBehavior: z.enum(["ignore", "reject"]).default("ignore"),
+	requireMentionInChannels: z.boolean().default(true),
+	requireMentionInDms: z.boolean().default(false),
 })
 
 const whatsappSchema = z.object({
