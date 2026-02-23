@@ -47,6 +47,8 @@ npm install -g opencode-claw
 opencode-claw
 ```
 
+No git clone needed. The package is published to npm and runs anywhere Node.js is available.
+
 ## Quick Start
 
 ```bash
@@ -60,13 +62,65 @@ npx opencode-claw --init
 npx opencode-claw
 ```
 
-Or create `opencode-claw.json` manually — see the [example config](https://github.com/jinkoso/opencode-claw/blob/main/opencode-claw.example.json) for all available options.
+`--init` launches an interactive wizard that asks which channels to enable, prompts for bot tokens and allowlists, and writes an `opencode-claw.json` in the current directory. You can also copy the bundled example config directly:
 
-The service starts an OpenCode server, connects your configured channels, initializes the memory system, and begins listening for messages.
+```bash
+# After global install
+cp $(npm root -g)/opencode-claw/opencode-claw.example.json ./opencode-claw.json
+
+# After npx run (example config also on GitHub)
+# https://github.com/jinkoso/opencode-claw/blob/main/opencode-claw.example.json
+```
+
+## How It Works
+
+When you run `opencode-claw`, it:
+
+1. Reads `opencode-claw.json` from the current directory (or the path in `OPENCODE_CLAW_CONFIG`)
+2. Starts an OpenCode server, **automatically registering the memory plugin** — no changes to `opencode.json` or any OpenCode config required
+3. Connects your configured channel adapters (Telegram, Slack, WhatsApp)
+4. Routes inbound messages to OpenCode sessions and streams responses back
+
+### Automatic Memory Plugin Registration
+
+The memory plugin is wired automatically. You do **not** need to modify OpenCode's own config files. Internally, opencode-claw resolves the plugin path relative to its own installed location and passes it to the OpenCode SDK:
+
+```
+opencode-claw starts
+  → resolves plugin path from its own dist/ directory
+  → passes plugin: ["file:///...path.../dist/memory/plugin-entry.js"] to createOpencode()
+  → OpenCode server starts with the plugin loaded
+  → memory_search, memory_store, memory_delete tools available in every session
+```
+
+This path resolution uses `import.meta.url` and works correctly whether you installed via `npm install -g`, `npx`, or as a local dependency — no hardcoded paths, no manual setup.
+
+### Session Persistence
+
+opencode-claw maps each channel peer (Telegram username, Slack user ID, phone number) to an OpenCode session ID, persisted in `./data/sessions.json` (relative to the config file). When you restart the service, existing sessions resume automatically.
+
+### Config File Location
+
+The config file is discovered in this order:
+
+1. `OPENCODE_CLAW_CONFIG` environment variable (absolute path to the config file)
+2. `./opencode-claw.json` in the current working directory
+3. `../opencode-claw.json` in the parent directory
+
+All relative paths inside `opencode-claw.json` (memory directory, session file, outbox, WhatsApp auth) are resolved relative to the **config file's directory**, not the current working directory. This means the service creates consistent data paths regardless of where you invoke it from.
+
+**Data files created by default (relative to config file):**
+
+| Path | Purpose |
+|------|---------|
+| `./data/memory/` | Memory files (txt backend) |
+| `./data/sessions.json` | Session ID persistence |
+| `./data/outbox/` | Async delivery queue for cron results |
+| `./data/whatsapp/auth/` | WhatsApp multi-device credentials |
 
 ## Configuration
 
-All configuration lives in `opencode-claw.json` in the current working directory. Environment variables can be referenced with `${VAR_NAME}` syntax and will be expanded at load time.
+All configuration lives in `opencode-claw.json`. Environment variables can be referenced with `${VAR_NAME}` syntax and are expanded at load time.
 
 ### OpenCode
 
@@ -114,7 +168,7 @@ All configuration lives in `opencode-claw.json` in the current working directory
 }
 ```
 
-Memory is injected into OpenCode sessions via a plugin. The agent can call `memory_search`, `memory_store`, and `memory_delete` tools during any conversation.
+Memory is injected into OpenCode sessions automatically via the memory plugin. The agent can call `memory_search`, `memory_store`, and `memory_delete` tools during any conversation.
 
 ### Channels
 
@@ -202,7 +256,12 @@ Jobs use standard [cron expressions](https://crontab.guru/). Each job creates a 
 ```json
 {
   "router": {
-    "timeoutMs": 300000
+    "timeoutMs": 300000,
+    "progress": {
+      "enabled": true,
+      "toolThrottleMs": 5000,
+      "heartbeatMs": 30000
+    }
   }
 }
 ```
@@ -210,6 +269,11 @@ Jobs use standard [cron expressions](https://crontab.guru/). Each job creates a 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `timeoutMs` | number | `300000` (5 min) | Max time to wait for an agent response before timing out |
+| `progress.enabled` | boolean | `true` | Forward tool-use notifications and heartbeats to the channel while the agent is working |
+| `progress.toolThrottleMs` | number | `5000` | Minimum ms between tool-use progress messages (prevents flooding) |
+| `progress.heartbeatMs` | number | `30000` | Interval for "still working…" heartbeat messages during long-running tasks |
+
+When `progress.enabled` is true, the router sends intermediate updates to the channel while the agent is processing — tool call notifications (e.g. "Running: read_file"), todo list updates when the agent calls `TodoWrite`, and periodic heartbeats so you know it hasn't stalled.
 
 ### Health Server
 
@@ -303,9 +367,33 @@ Use the memory plugin with a vanilla OpenCode installation (without the rest of 
 
 ```typescript
 import { memoryPlugin } from "opencode-claw/plugin"
+import { createOpencode } from "@opencode-ai/sdk"
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { dirname } from "node:path"
+
+const dir = dirname(fileURLToPath(import.meta.url))
+const pluginPath = `file://${resolve(dir, "node_modules/opencode-claw/dist/memory/plugin-entry.js")}`
+
+const { client, server } = await createOpencode({
+  config: { plugin: [pluginPath] },
+})
 ```
 
-This registers `memory_search`, `memory_store`, and `memory_delete` tools, and injects relevant memories into the system prompt via a chat transform hook. Configure it by placing an `opencode-claw.json` with a `memory` section in your OpenCode project directory.
+The plugin registers `memory_search`, `memory_store`, and `memory_delete` tools, and injects relevant memories into the system prompt via a chat transform hook. It reads its config from `opencode-claw.json` in the working directory — only the `memory` section is required:
+
+```json
+{
+  "memory": {
+    "backend": "txt",
+    "txt": {
+      "directory": "./data/memory"
+    }
+  }
+}
+```
+
+> **Note**: You do not need the standalone plugin wiring when using `opencode-claw` directly — it is registered automatically on startup.
 
 ## Inspiration
 
