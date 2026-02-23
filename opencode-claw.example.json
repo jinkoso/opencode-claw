@@ -59,7 +59,12 @@
     "maxAttempts": 3
   },
   "router": {
-    "timeoutMs": 300000
+    "timeoutMs": 300000,
+    "progress": {
+      "enabled": true,
+      "toolThrottleMs": 5000,
+      "heartbeatMs": 30000
+    }
   },
   "health": {
     "enabled": false,
