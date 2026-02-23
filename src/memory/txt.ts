@@ -6,6 +6,7 @@ import type {
 	MemoryCategory,
 	MemoryEntry,
 	MemoryInput,
+	MemoryScope,
 	MemorySearchOptions,
 	MemoryStatus,
 } from "./types.js"
@@ -21,6 +22,16 @@ function generateId(): string {
 		suffix += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)]
 	}
 	return `${ts}-${suffix}`
+}
+
+function sanitizeKey(key: string): string {
+	return key.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64)
+}
+
+function filenameForScope(scope: MemoryScope, projectKey?: string): string {
+	if (scope === "tenet") return "tenet.md"
+	if (scope === "project") return `project-${sanitizeKey(projectKey ?? "global")}.md`
+	return "general.md"
 }
 
 function parseMemoryFile(raw: string): MemoryEntry[] {
@@ -78,16 +89,28 @@ function relevance(query: string, content: string, category: string): number {
 }
 
 export function createTxtMemoryBackend(directory: string): MemoryBackend {
-	const filepath = join(directory, "MEMORY.md")
 	let initialized = false
 
-	async function readFile(): Promise<string> {
-		if (!(await fileExists(filepath))) return ""
-		return readTextFile(filepath)
+	function filepath(scope: MemoryScope, projectKey?: string): string {
+		return join(directory, filenameForScope(scope, projectKey))
 	}
 
-	async function writeFile(content: string): Promise<void> {
-		await writeTextFile(filepath, content)
+	async function readFile(path: string): Promise<string> {
+		if (!(await fileExists(path))) return ""
+		return readTextFile(path)
+	}
+
+	async function writeFile(path: string, content: string): Promise<void> {
+		await writeTextFile(path, content)
+	}
+
+	async function readScopedEntries(
+		scope: MemoryScope,
+		projectKey?: string,
+	): Promise<MemoryEntry[]> {
+		const raw = await readFile(filepath(scope, projectKey))
+		if (!raw) return []
+		return parseMemoryFile(raw).map((e) => ({ ...e, scope, projectKey }))
 	}
 
 	return {
@@ -97,14 +120,44 @@ export function createTxtMemoryBackend(directory: string): MemoryBackend {
 		},
 
 		async search(query: string, options?: MemorySearchOptions): Promise<MemoryEntry[]> {
-			const raw = await readFile()
-			if (!raw) return []
-
-			const entries = parseMemoryFile(raw)
+			const scopeFilter = options?.scope
+			const projectKey = options?.projectKey
 			const limit = options?.limit ?? 10
 			const minScore = options?.minRelevance ?? 0.1
 
-			const scored = entries
+			// Determine which scopes to search
+			let scopes: Array<{ scope: MemoryScope; projectKey?: string }>
+			if (scopeFilter) {
+				scopes = [{ scope: scopeFilter, projectKey }]
+			} else {
+				// Search all scopes: tenet + project (if projectKey given) + general
+				scopes = [{ scope: "tenet" }, { scope: "general" }]
+				if (projectKey) {
+					scopes.push({ scope: "project", projectKey })
+				}
+				// Also check legacy MEMORY.md for backward compatibility
+			}
+
+			const allEntries: MemoryEntry[] = []
+			for (const s of scopes) {
+				const entries = await readScopedEntries(s.scope, s.projectKey)
+				allEntries.push(...entries)
+			}
+
+			// Legacy MEMORY.md fallback (backward compat — read once, treat as "general")
+			if (!scopeFilter) {
+				const legacyPath = join(directory, "MEMORY.md")
+				const legacyRaw = await readFile(legacyPath)
+				if (legacyRaw) {
+					const legacyEntries = parseMemoryFile(legacyRaw).map((e) => ({
+						...e,
+						scope: "general" as MemoryScope,
+					}))
+					allEntries.push(...legacyEntries)
+				}
+			}
+
+			const scored = allEntries
 				.map((entry) => ({
 					...entry,
 					relevance: relevance(query, entry.content, entry.category),
@@ -123,39 +176,117 @@ export function createTxtMemoryBackend(directory: string): MemoryBackend {
 		},
 
 		async store(entry: MemoryInput): Promise<void> {
+			const scope: MemoryScope = entry.scope ?? "general"
+			const path = filepath(scope, entry.projectKey)
 			const id = generateId()
 			const timestamp = new Date().toISOString()
 			const formatted = formatEntry(entry, id, timestamp)
 
-			const existing = await readFile()
+			const existing = await readFile(path)
 			const content = existing
 				? `${existing.trimEnd()}\n\n${SEPARATOR}${formatted}\n`
 				: `${formatted}\n`
-			await writeFile(content)
+			await writeFile(path, content)
 		},
 
 		async delete(id: string): Promise<void> {
-			const raw = await readFile()
-			if (!raw) return
+			// Must search all scope files for the entry
+			const scopeCombos: Array<{ scope: MemoryScope; projectKey?: string }> = [
+				{ scope: "tenet" },
+				{ scope: "general" },
+			]
 
-			const entries = parseMemoryFile(raw)
-			const filtered = entries.filter((e) => e.id !== id)
-			if (filtered.length === entries.length) return
+			// Also check all project-*.md files in directory
+			try {
+				const { readdir } = await import("node:fs/promises")
+				const files = await readdir(directory)
+				for (const f of files) {
+					if (f.startsWith("project-") && f.endsWith(".md")) {
+						const key = f.slice("project-".length, -".md".length)
+						scopeCombos.push({ scope: "project", projectKey: key })
+					}
+				}
+			} catch {
+				// directory may not exist yet, ignore
+			}
 
-			const content = filtered
-				.map((e) => formatEntry(e, e.id, e.createdAt.toISOString()))
-				.join(SEPARATOR)
-			await writeFile(content ? `${content}\n` : "")
+			// Also handle legacy MEMORY.md
+			const legacyPath = join(directory, "MEMORY.md")
+			const legacyRaw = await readFile(legacyPath)
+			if (legacyRaw) {
+				const entries = parseMemoryFile(legacyRaw)
+				const filtered = entries.filter((e) => e.id !== id)
+				if (filtered.length < entries.length) {
+					const content = filtered
+						.map((e) => formatEntry(e, e.id, e.createdAt.toISOString()))
+						.join(SEPARATOR)
+					await writeFile(legacyPath, content ? `${content}\n` : "")
+					return
+				}
+			}
+
+			for (const { scope, projectKey } of scopeCombos) {
+				const path = filepath(scope, projectKey)
+				const raw = await readFile(path)
+				if (!raw) continue
+
+				const entries = parseMemoryFile(raw)
+				const filtered = entries.filter((e) => e.id !== id)
+				if (filtered.length < entries.length) {
+					const content = filtered
+						.map((e) => formatEntry(e, e.id, e.createdAt.toISOString()))
+						.join(SEPARATOR)
+					await writeFile(path, content ? `${content}\n` : "")
+					return
+				}
+			}
 		},
 
 		async status(): Promise<MemoryStatus> {
-			const raw = await readFile()
-			const entries = raw ? parseMemoryFile(raw) : []
+			let total = 0
+
+			for (const scope of ["tenet", "general"] as MemoryScope[]) {
+				const raw = await readFile(filepath(scope))
+				if (raw) total += parseMemoryFile(raw).length
+			}
+
+			// Count project files
+			try {
+				const { readdir } = await import("node:fs/promises")
+				const files = await readdir(directory)
+				for (const f of files) {
+					if (f.startsWith("project-") && f.endsWith(".md")) {
+						const raw = await readFile(join(directory, f))
+						if (raw) total += parseMemoryFile(raw).length
+					}
+				}
+			} catch {
+				// directory may not exist yet
+			}
+
+			// Legacy MEMORY.md
+			const legacyRaw = await readFile(join(directory, "MEMORY.md"))
+			if (legacyRaw) total += parseMemoryFile(legacyRaw).length
+
 			return {
 				backend: "txt",
 				initialized,
-				entryCount: entries.length,
+				entryCount: total,
 			}
+		},
+
+
+		async load(scope: MemoryScope, projectKey?: string): Promise<string> {
+			return readFile(filepath(scope, projectKey))
+		},
+
+		async replace(
+			scope: MemoryScope,
+			projectKey: string | undefined,
+			content: string,
+		): Promise<void> {
+			const path = filepath(scope, projectKey)
+			await writeFile(path, content)
 		},
 
 		async close() {

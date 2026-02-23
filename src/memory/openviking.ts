@@ -3,6 +3,7 @@ import type {
 	MemoryBackend,
 	MemoryEntry,
 	MemoryInput,
+	MemoryScope,
 	MemorySearchOptions,
 	MemoryStatus,
 } from "./types.js"
@@ -139,7 +140,9 @@ export function createOpenVikingBackend(
 			const sid = session.session_id
 
 			const category = mapCategory(entry.category)
-			const tagged = `[${category}] [source:${entry.source}] ${entry.content}`
+			const scope: MemoryScope = entry.scope ?? "general"
+			const projectTag = entry.projectKey ? ` [project:${entry.projectKey}]` : ""
+			const tagged = `[${category}] [scope:${scope}]${projectTag} [source:${entry.source}] ${entry.content}`
 
 			await request<unknown>(`${base}/api/v1/sessions/${sid}/messages`, "POST", {
 				role: "user",
@@ -180,6 +183,16 @@ export function createOpenVikingBackend(
 					entryCount: 0,
 				}
 			}
+		},
+
+		async load(scope: MemoryScope, projectKey?: string): Promise<string> {
+			if (fallback) return fallback.load(scope, projectKey)
+			throw new Error("OpenViking backend does not support load(); use txt fallback")
+		},
+
+		async replace(scope: MemoryScope, projectKey: string | undefined, content: string): Promise<void> {
+			if (fallback) return fallback.replace(scope, projectKey, content)
+			throw new Error("OpenViking backend does not support replace(); use txt fallback")
 		},
 
 		async close() {

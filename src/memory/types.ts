@@ -1,3 +1,5 @@
+export type MemoryScope = "tenet" | "project" | "general"
+
 export type MemoryCategory =
 	| "project"
 	| "experience"
@@ -11,6 +13,8 @@ export type MemorySearchOptions = {
 	sessionId?: string
 	category?: MemoryCategory
 	minRelevance?: number
+	scope?: MemoryScope
+	projectKey?: string
 }
 
 export type MemoryEntry = {
@@ -21,6 +25,8 @@ export type MemoryEntry = {
 	createdAt: Date
 	relevance?: number
 	metadata?: Record<string, unknown>
+	scope?: MemoryScope
+	projectKey?: string
 }
 
 export type MemoryInput = {
@@ -28,6 +34,8 @@ export type MemoryInput = {
 	category: MemoryCategory
 	source: string
 	metadata?: Record<string, unknown>
+	scope?: MemoryScope
+	projectKey?: string
 }
 
 export type MemoryStatus = {
@@ -42,6 +50,8 @@ export type MemoryBackend = {
 	search(query: string, options?: MemorySearchOptions): Promise<MemoryEntry[]>
 	store(entry: MemoryInput): Promise<void>
 	delete(id: string): Promise<void>
+	load(scope: MemoryScope, projectKey?: string): Promise<string>
+	replace(scope: MemoryScope, projectKey: string | undefined, content: string): Promise<void>
 	status(): Promise<MemoryStatus>
 	close(): Promise<void>
 }

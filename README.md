@@ -140,7 +140,6 @@ All configuration lives in `opencode-claw.json`. Environment variables can be re
 | `configPath` | string | — | Path to a custom OpenCode config file |
 
 ### Memory
-
 ```json
 {
   "memory": {
@@ -152,7 +151,7 @@ All configuration lives in `opencode-claw.json`. Environment variables can be re
 }
 ```
 
-**Text backend** (`txt`): Stores knowledge in Markdown files organized by category (`general.md`, `project.md`, `experience.md`, `architecture.md`). Supports keyword-based search. Zero external dependencies.
+**Text backend** (`txt`): Stores knowledge in scoped Markdown files (`tenet.md`, `general.md`, `project-<id>.md`). Supports keyword-based search. Zero external dependencies.
 
 **OpenViking backend** (`openviking`): Connects to a running OpenViking instance for semantic vector search. Falls back to txt backend if OpenViking is unreachable (when `fallback: true`).
 
@@ -168,7 +167,60 @@ All configuration lives in `opencode-claw.json`. Environment variables can be re
 }
 ```
 
-Memory is injected into OpenCode sessions automatically via the memory plugin. The agent can call `memory_search`, `memory_store`, and `memory_delete` tools during any conversation.
+### Three-Layer Memory System
+
+Memory is organized into three layers with different injection behaviors:
+
+| Layer | Scope | File | Injected |
+|-------|-------|------|---------|
+| **Tenets** | Global | `tenet.md` | Always — every session, full list |
+| **General memory** | Global | `general.md` | Always — capped at 4000 chars; older entries noted as retrievable |
+| **Project memory** | Per-repo | `project-<id>.md` | Never injected as text; agent is instructed to call `memory_search` |
+
+**Tenets** are persistent principles, architectural rules, and preferences that shape AI behavior long-term. Use `tenet_store` to write them; they appear in every session automatically.
+
+**General memory** holds global searchable knowledge. The most recent entries up to 4 000 characters are injected into the system prompt automatically. When overflow occurs, a note is appended:
+
+```
+_(N older entries omitted — call `memory_search` to retrieve them)_
+```
+
+**Project memory** is scoped to the current git repository (identified by the root commit hash). It is never bulk-injected; instead, the agent receives an instruction to call `memory_search` with `scope='project'` at session start.
+
+The agent can call these tools during any conversation:
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Search general or project memory by keyword |
+| `memory_store` | Store a fact in general or project scope |
+| `memory_delete` | Delete a specific entry by id (use `memory_search` first to get the id) |
+| `memory_load` | Load the full raw content of a memory scope (for compaction) |
+| `memory_compact` | Replace an entire memory scope with synthesized content |
+| `memory_session_projects` | List all project keys touched in the current session |
+| `tenet_store` | Store a global coding principle or preference |
+| `tenet_list` | List all stored tenets |
+### Memory Compaction
+
+Memory compaction is a user-triggered workflow for keeping memory files lean and coherent. At the end of a session, ask the agent to compact memory. The agent performs three passes in order:
+
+**1. Project scope (one pass per project)**
+
+Call `memory_session_projects` to get the list of project keys touched during the session. For each key, call `memory_load` with `scope='project'` and `projectKey=<key>` to read the current content. The agent synthesizes a compact replacement that merges existing knowledge with new session findings, then calls `memory_compact` to write it back.
+
+**2. General scope**
+
+Call `memory_load` with `scope='general'` to read the current general memory. The agent distills only cross-project knowledge — relationships between projects, org structure, product context — and writes it back via `memory_compact`.
+
+**3. Tenet scope**
+
+Call `memory_load` with `scope='tenet'` to read current tenets. The agent refines them to capture only durable habits, coding standards, and processes, then writes back via `memory_compact`.
+
+Example prompt to trigger compaction at session end:
+
+```
+Compact my memory. First call memory_session_projects to see which projects we worked on.
+For each project, load and synthesize the project memory. Then compact general memory
+(keep only cross-project and org knowledge). Finally compact tenet memory (habits and standards only).
+```
 
 ### Channels
 
@@ -384,7 +436,7 @@ const { client, server } = await createOpencode({
 })
 ```
 
-The plugin registers `memory_search`, `memory_store`, and `memory_delete` tools, and injects relevant memories into the system prompt via a chat transform hook. It reads its config from `opencode-claw.json` in the working directory — only the `memory` section is required:
+The plugin registers `memory_search`, `memory_store`, `memory_delete`, `tenet_store`, and `tenet_list` tools, and injects tenets and general memories into the system prompt via a chat transform hook (see [Three-Layer Memory System](#three-layer-memory-system) above). It reads its config from `opencode-claw.json` in the working directory — only the `memory` section is required:
 
 ```json
 {

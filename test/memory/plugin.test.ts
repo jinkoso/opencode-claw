@@ -135,7 +135,6 @@ describe("experimental.chat.system.transform hook", () => {
 	test("is registered on the plugin", () => {
 		expect(plugin["experimental.chat.system.transform"]).toBeDefined()
 	})
-
 	test("injects memory instructions even when memory is empty", async () => {
 		const transform = plugin["experimental.chat.system.transform"] as (
 			input: unknown,
@@ -143,19 +142,18 @@ describe("experimental.chat.system.transform hook", () => {
 		) => Promise<void>
 		const output = { system: [] as string[] }
 		await transform({}, output)
-		// Multiple strings are pushed: at minimum the instruction block items
 		expect(output.system.length).toBeGreaterThan(0)
 		const joined = output.system.join("")
 		expect(joined).toContain("Memory")
 		expect(joined).toContain("memory_search")
 		expect(joined).toContain("memory_store")
-		expect(joined).toContain("MANDATORY")
 	})
-	test("injects relevant memories into output.system when entries exist", async () => {
-		// Store something with terms that match the default "recent context" query
+
+	test("injects general memories as full text when entries exist", async () => {
 		await backend.store({
-			content: "recent project context important",
-			category: "project",
+			content: "General fact about tooling",
+			category: "knowledge",
+			scope: "general",
 			source: "agent",
 		})
 
@@ -163,41 +161,265 @@ describe("experimental.chat.system.transform hook", () => {
 			input: unknown,
 			output: { system: string[] },
 		) => Promise<void>
-
 		const output = { system: [] as string[] }
 		await transform({}, output)
-		// If relevant memories were found, a block is pushed
-		// (may be empty if minRelevance 0.05 filters everything — acceptable)
-		// Just verify it doesn't throw and output.system is an array
-		expect(Array.isArray(output.system)).toBe(true)
+
+		const joined = output.system.join("")
+		expect(joined).toContain("General Memory")
+		expect(joined).toContain("General fact about tooling")
+	})
+
+	test("does not auto-inject project memories — only instructs agent to call memory_search", async () => {
+		await backend.store({
+			content: "Project-specific detail",
+			category: "project",
+			scope: "project",
+			projectKey: "some-repo-hash",
+			source: "agent",
+		})
+
+		const transform = plugin["experimental.chat.system.transform"] as (
+			input: unknown,
+			output: { system: string[] },
+		) => Promise<void>
+		const output = { system: [] as string[] }
+		await transform({}, output)
+
+		const joined = output.system.join("")
+		// Project content is NOT injected as text
+		expect(joined).not.toContain("Project-specific detail")
+		// But the instruction to call memory_search is present
+		expect(joined).toContain("memory_search")
+	})
+
+	test("omits overflow entries and appends a note when general memory exceeds char cap", async () => {
+		// Store many long entries to exceed the 4000-char cap
+		for (let i = 0; i < 20; i++) {
+			await backend.store({
+				content: `${"x".repeat(250)} entry-${i}`,
+				category: "knowledge",
+				scope: "general",
+				source: "agent",
+			})
+		}
+
+		const transform = plugin["experimental.chat.system.transform"] as (
+			input: unknown,
+			output: { system: string[] },
+		) => Promise<void>
+		const output = { system: [] as string[] }
+		await transform({}, output)
+
+		const joined = output.system.join("")
+		expect(joined).toContain("General Memory")
+		// Should warn about omitted entries
+		expect(joined).toContain("omitted")
+		expect(joined).toContain("memory_search")
 	})
 })
 
-describe("experimental.session.compacting hook", () => {
+describe("memory_delete tool", () => {
 	test("is registered on the plugin", () => {
-		expect(plugin["experimental.session.compacting"]).toBeDefined()
+		expect(plugin.tool?.memory_delete).toBeDefined()
 	})
 
-	test("pushes a flush instruction into output.context", async () => {
-		const hook = plugin["experimental.session.compacting"] as (
-			input: { sessionID: string },
-			output: { context: string[]; prompt?: string },
-		) => Promise<void>
-		const output = { context: [] as string[] }
-		await hook({ sessionID: "ses-test" }, output)
-		expect(output.context.length).toBe(1)
-		const msg = output.context[0]!
-		expect(msg).toContain("memory_store")
-		expect(msg).toContain("MANDATORY")
+	test("deletes an entry by id", async () => {
+		// Store an entry and retrieve its id via memory_search
+		const storeTool = plugin.tool?.memory_store
+		await storeTool!.execute(
+			{ content: "Fact to be deleted", category: "knowledge" },
+			makeCtx(),
+		)
+
+		const searchTool = plugin.tool?.memory_search
+		const searchResult = await searchTool!.execute({ query: "deleted" }, makeCtx())
+		expect(searchResult).toContain("Fact to be deleted")
+
+		// Extract the id from the result line: 'id:<id> [knowledge] ...'
+		const idMatch = searchResult.match(/^id:([^\s]+)/)
+		expect(idMatch).not.toBeNull()
+		const entryId = idMatch![1]!
+
+		const deleteTool = plugin.tool?.memory_delete
+		const deleteResult = await deleteTool!.execute({ id: entryId }, makeCtx())
+		expect(deleteResult).toBe("Memory entry deleted.")
+
+		// Confirm it's gone
+		const afterDelete = await searchTool!.execute({ query: "deleted" }, makeCtx())
+		expect(afterDelete).toBe("No relevant memories found.")
 	})
 
-	test("does not modify output.prompt", async () => {
-		const hook = plugin["experimental.session.compacting"] as (
-			input: { sessionID: string },
-			output: { context: string[]; prompt?: string },
-		) => Promise<void>
-		const output: { context: string[]; prompt?: string } = { context: [] }
-		await hook({ sessionID: "ses-test" }, output)
-		expect(output.prompt).toBeUndefined()
+	test("memory_search output includes id prefix", async () => {
+		await backend.store({ content: "Some fact", category: "knowledge", source: "agent" })
+		const searchTool = plugin.tool?.memory_search
+		const result = await searchTool!.execute({ query: "fact" }, makeCtx())
+		expect(result).toMatch(/^id:[^\s]+/)
+	})
+})
+
+describe("tenet_store tool", () => {
+	test("returns confirmation string on success", async () => {
+		const tenetStore = plugin.tool?.tenet_store
+		expect(tenetStore).toBeDefined()
+
+		const result = await tenetStore!.execute(
+			{ content: "Always prefer TypeScript over JavaScript", category: "preference" },
+			makeCtx(),
+		)
+		expect(result).toBe("Tenet stored.")
+	})
+
+	test("persists tenet to tenet scope in the backend", async () => {
+		const tenetStore = plugin.tool?.tenet_store
+		await tenetStore!.execute(
+			{ content: "Use ESM modules everywhere", category: "preference" },
+			makeCtx(),
+		)
+
+		const results = await backend.search("ESM", { scope: "tenet" })
+		expect(results.length).toBeGreaterThan(0)
+		expect(results[0]?.content).toContain("ESM")
+	})
+})
+
+describe("tenet_list tool", () => {
+	test("returns 'No tenets stored yet.' when empty", async () => {
+		const tenetList = plugin.tool?.tenet_list
+		expect(tenetList).toBeDefined()
+
+		const result = await tenetList!.execute({}, makeCtx())
+		expect(result).toBe("No tenets stored yet.")
+	})
+
+	test("lists all stored tenets after storing", async () => {
+		const tenetStore = plugin.tool?.tenet_store
+		await tenetStore!.execute({ content: "Always use strict mode", category: "preference" }, makeCtx())
+		await tenetStore!.execute({ content: "Prefer functional over OOP", category: "preference" }, makeCtx())
+
+		const result = await plugin.tool!.tenet_list!.execute({}, makeCtx())
+		expect(result).toContain("Always use strict mode")
+		expect(result).toContain("Prefer functional over OOP")
+	})
+
+	test("does not list general or project memories", async () => {
+		const storeTool = plugin.tool?.memory_store
+		await storeTool!.execute({ content: "This is a general fact", category: "knowledge" }, makeCtx())
+
+		const result = await plugin.tool!.tenet_list!.execute({}, makeCtx())
+		expect(result).toBe("No tenets stored yet.")
+	})
+})
+
+describe("memory_store auto-scope", () => {
+	test("defaults to general when no projectKey in stub", async () => {
+		const storeTool = plugin.tool?.memory_store
+		await storeTool!.execute({ content: "Cross-project fact", category: "knowledge" }, makeCtx())
+
+		const general = await backend.search("cross-project", { scope: "general" })
+		expect(general.length).toBeGreaterThan(0)
+	})
+
+	test("stores to project scope when project.id is in stub", async () => {
+		const projectStub = {
+			client: {},
+			project: { id: "my-repo-hash-abc" },
+			directory: dir,
+			worktree: dir,
+			serverUrl: new URL("http://localhost"),
+			$: {},
+		} as unknown as PluginInput
+		const projectPlugin = await createMemoryPlugin(backend)(projectStub)
+
+		const storeTool = projectPlugin.tool?.memory_store
+		await storeTool!.execute({ content: "Repo-specific fact", category: "project" }, makeCtx())
+
+		const results = await backend.search("repo-specific", { scope: "project", projectKey: "my-repo-hash-abc" })
+		expect(results.length).toBeGreaterThan(0)
+	})
+})
+
+describe("memory_load tool", () => {
+	test("is registered on the plugin", () => {
+		expect(plugin.tool?.memory_load).toBeDefined()
+	})
+
+	test("returns empty message when scope has no content", async () => {
+		const result = await plugin.tool!.memory_load!.execute({ scope: "general" }, makeCtx())
+		expect(result).toBe("(empty \u2014 no memories stored in this scope)")
+	})
+
+	test("returns raw file content after storing entries", async () => {
+		await backend.store({ content: "Cross-project tooling fact", category: "knowledge", scope: "general", source: "agent" })
+		const result = await plugin.tool!.memory_load!.execute({ scope: "general" }, makeCtx())
+		expect(result).toContain("Cross-project tooling fact")
+	})
+
+	test("loads project scope with current project key by default", async () => {
+		const projectStub = {
+			client: {},
+			project: { id: "proj-hash-xyz" },
+			directory: dir,
+			worktree: dir,
+			serverUrl: new URL("http://localhost"),
+			$: {},
+		} as unknown as PluginInput
+		const projectPlugin = await createMemoryPlugin(backend)(projectStub)
+		await backend.store({ content: "Repo detail", category: "project", scope: "project", projectKey: "proj-hash-xyz", source: "agent" })
+		const result = await projectPlugin.tool!.memory_load!.execute({ scope: "project" }, makeCtx())
+		expect(result).toContain("Repo detail")
+	})
+})
+
+describe("memory_compact tool", () => {
+	test("is registered on the plugin", () => {
+		expect(plugin.tool?.memory_compact).toBeDefined()
+	})
+
+	test("overwrites general scope with new content", async () => {
+		await backend.store({ content: "Old general fact", category: "knowledge", scope: "general", source: "agent" })
+		const compactResult = await plugin.tool!.memory_compact!.execute(
+			{ scope: "general", content: "Synthesized compact general memory" },
+			makeCtx(),
+		)
+		expect(compactResult).toBe("Compacted general memory.")
+		const loaded = await plugin.tool!.memory_load!.execute({ scope: "general" }, makeCtx())
+		expect(loaded).toBe("Synthesized compact general memory")
+	})
+
+	test("overwrites tenet scope with new content", async () => {
+		await backend.store({ content: "Old tenet", category: "preference", scope: "tenet", source: "agent" })
+		const result = await plugin.tool!.memory_compact!.execute(
+			{ scope: "tenet", content: "New compact tenet content" },
+			makeCtx(),
+		)
+		expect(result).toBe("Compacted tenet memory.")
+		const loaded = await plugin.tool!.memory_load!.execute({ scope: "tenet" }, makeCtx())
+		expect(loaded).toBe("New compact tenet content")
+	})
+})
+
+describe("memory_session_projects tool", () => {
+	test("is registered on the plugin", () => {
+		expect(plugin.tool?.memory_session_projects).toBeDefined()
+	})
+
+	test("returns 'No projects recorded' when no project in stub", async () => {
+		const result = await plugin.tool!.memory_session_projects!.execute({}, makeCtx())
+		expect(result).toBe("No projects recorded in this session.")
+	})
+
+	test("tracks project key when plugin is invoked with a project", async () => {
+		const projectStub = {
+			client: {},
+			project: { id: "tracked-proj-hash" },
+			directory: dir,
+			worktree: dir,
+			serverUrl: new URL("http://localhost"),
+			$: {},
+		} as unknown as PluginInput
+		const factory = createMemoryPlugin(backend)
+		const projectPlugin = await factory(projectStub)
+		const result = await projectPlugin.tool!.memory_session_projects!.execute({}, makeCtx())
+		expect(result).toContain("tracked-proj-hash")
 	})
 })
