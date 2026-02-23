@@ -58,21 +58,18 @@ export function createSessionManager(
 		return session.data.id
 	}
 
-	async function listSessions(channelPeerPrefix: string): Promise<SessionInfo[]> {
+	async function listSessions(key: string): Promise<SessionInfo[]> {
 		const all = await client.session.list()
 		const sessions = all.data ?? []
-		const entries = [...map.entries()].filter(([key]) => key.includes(channelPeerPrefix))
+		const activeId = map.get(key)
 
-		return entries.map(([key, id]) => {
-			const session = sessions.find((s) => s.id === id)
-			return {
-				id,
-				key,
-				title: session?.title ?? "(deleted)",
-				active: map.get(key) === id,
-				createdAt: session?.time.created,
-			}
-		})
+		return sessions.map((s) => ({
+			id: s.id,
+			key: [...map.entries()].find(([, id]) => id === s.id)?.[0] ?? "(external)",
+			title: s.title ?? s.id,
+			active: s.id === activeId,
+			createdAt: s.time.created,
+		}))
 	}
 
 	function currentSession(key: string): string | undefined {

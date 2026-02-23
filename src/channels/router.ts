@@ -70,7 +70,7 @@ async function handleCommand(
 	activeStreams: Map<string, string>,
 ): Promise<string> {
 	const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
-	const prefix = `${msg.channel}:${msg.peerId}`
+
 
 	switch (cmd.name) {
 		case "new": {
@@ -83,7 +83,7 @@ async function handleCommand(
 			return `Switched to session: ${cmd.args}`
 		}
 		case "sessions": {
-			const list = await deps.sessions.listSessions(prefix)
+			const list = await deps.sessions.listSessions(key)
 			if (list.length === 0) return "No sessions found."
 			return list
 				.map((s) => {
@@ -124,6 +124,12 @@ async function handleCommand(
 			return `Unknown command: /${cmd.name}\n\n${HELP_TEXT}`
 		}
 	}
+}
+
+/** Turn raw MCP tool names like `websearch_web_search_exa` into `Web Search Exa`. */
+function humanizeToolName(raw: string): string {
+	if (raw.includes(" ")) return raw
+	return raw.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 type QuestionResolver = {
@@ -213,7 +219,7 @@ async function routeMessage(
 		? {
 				onToolRunning: (_tool, title) =>
 					adapter.send(msg.peerId, {
-						text: `🔧 ${title}...`,
+						text: `🔧 ${humanizeToolName(title)}...`,
 						replyToId: msg.replyToId,
 					}),
 				onHeartbeat: async () => {
