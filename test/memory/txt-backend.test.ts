@@ -200,8 +200,18 @@ describe("status", () => {
 
 describe("scoped search", () => {
 	test("scope:tenet only returns tenet entries", async () => {
-		await backend.store({ content: "Tenet: always use TypeScript", category: "preference", source: "agent", scope: "tenet" })
-		await backend.store({ content: "General: TypeScript is great", category: "knowledge", source: "agent", scope: "general" })
+		await backend.store({
+			content: "Tenet: always use TypeScript",
+			category: "preference",
+			source: "agent",
+			scope: "tenet",
+		})
+		await backend.store({
+			content: "General: TypeScript is great",
+			category: "knowledge",
+			source: "agent",
+			scope: "general",
+		})
 
 		const results = await backend.search("TypeScript", { scope: "tenet" })
 		expect(results.length).toBe(1)
@@ -209,8 +219,18 @@ describe("scoped search", () => {
 	})
 
 	test("scope:general only returns general entries", async () => {
-		await backend.store({ content: "Tenet: use ESM modules", category: "preference", source: "agent", scope: "tenet" })
-		await backend.store({ content: "General: ESM is the standard", category: "knowledge", source: "agent", scope: "general" })
+		await backend.store({
+			content: "Tenet: use ESM modules",
+			category: "preference",
+			source: "agent",
+			scope: "tenet",
+		})
+		await backend.store({
+			content: "General: ESM is the standard",
+			category: "knowledge",
+			source: "agent",
+			scope: "general",
+		})
 
 		const results = await backend.search("ESM", { scope: "general" })
 		expect(results.length).toBe(1)
@@ -218,8 +238,20 @@ describe("scoped search", () => {
 	})
 
 	test("scope:project only returns entries for the given projectKey", async () => {
-		await backend.store({ content: "Project A: uses React", category: "project", source: "agent", scope: "project", projectKey: "proj-a" })
-		await backend.store({ content: "Project B: uses Vue", category: "project", source: "agent", scope: "project", projectKey: "proj-b" })
+		await backend.store({
+			content: "Project A: uses React",
+			category: "project",
+			source: "agent",
+			scope: "project",
+			projectKey: "proj-a",
+		})
+		await backend.store({
+			content: "Project B: uses Vue",
+			category: "project",
+			source: "agent",
+			scope: "project",
+			projectKey: "proj-b",
+		})
 
 		const results = await backend.search("uses", { scope: "project", projectKey: "proj-a" })
 		expect(results.length).toBe(1)
@@ -227,18 +259,52 @@ describe("scoped search", () => {
 	})
 
 	test("unscoped search includes all scopes", async () => {
-		await backend.store({ content: "Tenet knowledge entry", category: "knowledge", source: "agent", scope: "tenet" })
-		await backend.store({ content: "General knowledge entry", category: "knowledge", source: "agent", scope: "general" })
-		await backend.store({ content: "Project knowledge entry", category: "knowledge", source: "agent", scope: "project", projectKey: "test-proj" })
+		await backend.store({
+			content: "Tenet knowledge entry",
+			category: "knowledge",
+			source: "agent",
+			scope: "tenet",
+		})
+		await backend.store({
+			content: "General knowledge entry",
+			category: "knowledge",
+			source: "agent",
+			scope: "general",
+		})
+		await backend.store({
+			content: "Project knowledge entry",
+			category: "knowledge",
+			source: "agent",
+			scope: "project",
+			projectKey: "test-proj",
+		})
 
-		const results = await backend.search("knowledge entry", { projectKey: "test-proj", minRelevance: 0 })
+		const results = await backend.search("knowledge entry", {
+			projectKey: "test-proj",
+			minRelevance: 0,
+		})
 		expect(results.length).toBe(3)
 	})
 
 	test("tenet search with empty query and minRelevance:0 returns all tenets", async () => {
-		await backend.store({ content: "First tenet", category: "preference", source: "agent", scope: "tenet" })
-		await backend.store({ content: "Second tenet", category: "experience", source: "agent", scope: "tenet" })
-		await backend.store({ content: "General note", category: "knowledge", source: "agent", scope: "general" })
+		await backend.store({
+			content: "First tenet",
+			category: "preference",
+			source: "agent",
+			scope: "tenet",
+		})
+		await backend.store({
+			content: "Second tenet",
+			category: "experience",
+			source: "agent",
+			scope: "tenet",
+		})
+		await backend.store({
+			content: "General note",
+			category: "knowledge",
+			source: "agent",
+			scope: "general",
+		})
 
 		const results = await backend.search("", { scope: "tenet", minRelevance: 0 })
 		expect(results.length).toBe(2)

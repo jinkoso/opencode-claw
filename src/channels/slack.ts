@@ -60,14 +60,13 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 			}
 		}
 
-		const peerId = message.user
-		const channel = "channel" in message ? (message.channel as string) : undefined
-
-		if (config.allowlist && config.allowlist.length > 0 && !config.allowlist.includes(peerId)) {
+		const userId = message.user
+		const peerId = isDm ? userId : channelId
+		if (config.allowlist && config.allowlist.length > 0 && !config.allowlist.includes(userId)) {
 			if (config.rejectionBehavior === "reject") {
 				await say("This assistant is private.")
 			}
-			logger.debug("slack: message dropped (not in allowlist)", { peerId })
+			logger.debug("slack: message dropped (not in allowlist)", { userId })
 			return
 		}
 
@@ -76,7 +75,8 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		const msg = {
 			channel: "slack" as const,
 			peerId,
-			groupId: channel,
+			senderId: userId,
+			groupId: channelId,
 			threadId: threadTs,
 			text: message.text,
 			raw: message,

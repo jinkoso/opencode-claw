@@ -5,6 +5,7 @@ export type ChannelStatus = "connected" | "disconnected" | "connecting" | "error
 export type InboundMessage = {
 	channel: ChannelId
 	peerId: string
+	senderId?: string
 	peerName?: string
 	groupId?: string
 	threadId?: string

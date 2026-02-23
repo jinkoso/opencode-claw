@@ -125,7 +125,11 @@ export async function promptAndWait(
 		}
 	} finally {
 		clearTimeout(timer)
-		try { await stream.return(undefined) } catch { /* ignore close errors */ }
+		try {
+			await stream.return(undefined)
+		} catch {
+			/* ignore close errors */
+		}
 	}
 
 	if (timedOut) throw new Error(`promptAndWait timed out after ${timeoutMs}ms`)

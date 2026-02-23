@@ -33,7 +33,7 @@ function rejection(config: Config, channel: ChannelId): "ignore" | "reject" {
 function checkAllowlist(config: Config, msg: InboundMessage): boolean {
 	const list = allowlist(config, msg.channel)
 	if (!list || list.length === 0) return true
-	return list.includes(msg.peerId)
+	return list.includes(msg.senderId ?? msg.peerId)
 }
 
 type Command = {
@@ -77,7 +77,8 @@ async function handleCommand(
 	activeStreams: Map<string, string>,
 	activeStreamsMeta: Map<string, ActiveStreamMeta>,
 ): Promise<string> {
-	const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
+	const sessionThreadId = msg.channel === "slack" ? undefined : msg.threadId
+	const key = buildSessionKey(msg.channel, msg.peerId, sessionThreadId)
 	switch (cmd.name) {
 		case "new": {
 			const id = await deps.sessions.newSession(key, cmd.args || undefined)
@@ -194,7 +195,7 @@ async function routeMessage(
 	if (!checkAllowlist(deps.config, msg)) {
 		const behavior = rejection(deps.config, msg.channel)
 		if (behavior === "reject") {
-			await adapter.send(msg.peerId, { text: "This assistant is private." })
+			await adapter.send(msg.peerId, { text: "This assistant is private.", threadId: msg.threadId })
 		}
 		deps.logger.debug("router: message dropped (not in allowlist)", {
 			channel: msg.channel,
@@ -207,12 +208,17 @@ async function routeMessage(
 	const cmd = parseCommand(msg.text)
 	if (cmd) {
 		const reply = await handleCommand(cmd, msg, deps, activeStreams, activeStreamsMeta)
-		await adapter.send(msg.peerId, { text: reply, replyToId: msg.replyToId })
+		await adapter.send(msg.peerId, {
+			text: reply,
+			replyToId: msg.replyToId,
+			threadId: msg.threadId,
+		})
 		return
 	}
 
 	// Resolve or create session
-	const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
+	const sessionThreadId = msg.channel === "slack" ? undefined : msg.threadId
+	const key = buildSessionKey(msg.channel, msg.peerId, sessionThreadId)
 	const sessionId = await deps.sessions.resolveSession(key)
 
 	deps.logger.debug("router: prompting session", { sessionId, channel: msg.channel })
@@ -272,11 +278,11 @@ async function routeMessage(
 					if (adapter.sendTyping) {
 						await adapter.sendTyping(msg.peerId).catch(() => {})
 					}
-					await adapter.send(msg.peerId, { text: "⏳ Still working..." })
+					await adapter.send(msg.peerId, { text: "⏳ Still working...", threadId: msg.threadId })
 				},
 				onQuestion: async (request) => {
 					const text = formatQuestion(request)
-					await adapter.send(msg.peerId, { text })
+					await adapter.send(msg.peerId, { text, threadId: msg.threadId })
 					const userReply = await waitForUserReply(deps.timeoutMs)
 					return request.questions.map(() => [userReply])
 				},
@@ -284,7 +290,7 @@ async function routeMessage(
 				heartbeatMs: deps.config.router.progress.heartbeatMs,
 				onTodoUpdated: async (todos) => {
 					const text = formatTodoList(todos)
-					await adapter.send(msg.peerId, { text })
+					await adapter.send(msg.peerId, { text, threadId: msg.threadId })
 				},
 			}
 		: undefined
@@ -303,6 +309,7 @@ async function routeMessage(
 			await adapter.send(msg.peerId, {
 				text: "Request timed out. The agent took too long to respond.",
 				replyToId: msg.replyToId,
+				threadId: msg.threadId,
 			})
 			return
 		}
@@ -322,11 +329,11 @@ async function routeMessage(
 
 	if (!reply) {
 		deps.logger.warn("router: empty response from agent", { sessionId })
-		await adapter.send(msg.peerId, { text: "(empty response)" })
+		await adapter.send(msg.peerId, { text: "(empty response)", threadId: msg.threadId })
 		return
 	}
 
-	await adapter.send(msg.peerId, { text: reply, replyToId: msg.replyToId })
+	await adapter.send(msg.peerId, { text: reply, replyToId: msg.replyToId, threadId: msg.threadId })
 }
 
 export function createRouter(deps: RouterDeps) {

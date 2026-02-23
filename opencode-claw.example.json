@@ -14,14 +14,18 @@
       "botToken": "${TELEGRAM_BOT_TOKEN}",
       "allowlist": ["your_telegram_username"],
       "mode": "polling",
-      "rejectionBehavior": "ignore"
+      "rejectionBehavior": "ignore",
+      "requireMentionInChannels": true,
+      "requireMentionInDms": false
     },
     "slack": {
       "enabled": false,
       "botToken": "${SLACK_BOT_TOKEN}",
       "appToken": "${SLACK_APP_TOKEN}",
       "mode": "socket",
-      "rejectionBehavior": "ignore"
+      "rejectionBehavior": "ignore",
+      "requireMentionInChannels": true,
+      "requireMentionInDms": false
     },
     "whatsapp": {
       "enabled": false,

@@ -21,7 +21,6 @@ async function main() {
 
 		const PROJECT_KEY = "test-project-abc123"
 
-
 		await backend.store({
 			content: "opencode-claw uses Bun as its test runner",
 			category: "knowledge",
@@ -45,7 +44,6 @@ async function main() {
 		})
 		ok("3 project-scoped entries stored")
 
-
 		await backend.store({
 			content: "citronetic is the org that owns opencode-claw",
 			category: "entity",
@@ -59,7 +57,6 @@ async function main() {
 			scope: "general",
 		})
 		ok("2 general entries stored")
-
 
 		await backend.store({
 			content: "Never use 'as any' or @ts-ignore — biome enforces noExplicitAny",
@@ -95,7 +92,6 @@ async function main() {
 		ok(`tenet scope loaded (${rawTenet.length} chars, 2 entries)`)
 
 		section("3. Compact: project scope (simulates memory_compact tool)")
-
 
 		const compactedProject = `## [knowledge] ${new Date().toISOString()} | source:agent
 
@@ -204,7 +200,6 @@ Dev standards:
 		ok(
 			`status: backend=${status.backend}, initialized=${status.initialized}, entryCount=${status.entryCount}`,
 		)
-
 
 		console.log("\n✅ All compaction workflow checks passed!\n")
 	} finally {

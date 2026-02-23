@@ -226,10 +226,7 @@ describe("memory_delete tool", () => {
 	test("deletes an entry by id", async () => {
 		// Store an entry and retrieve its id via memory_search
 		const storeTool = plugin.tool?.memory_store
-		await storeTool!.execute(
-			{ content: "Fact to be deleted", category: "knowledge" },
-			makeCtx(),
-		)
+		await storeTool!.execute({ content: "Fact to be deleted", category: "knowledge" }, makeCtx())
 
 		const searchTool = plugin.tool?.memory_search
 		const searchResult = await searchTool!.execute({ query: "deleted" }, makeCtx())
@@ -293,8 +290,14 @@ describe("tenet_list tool", () => {
 
 	test("lists all stored tenets after storing", async () => {
 		const tenetStore = plugin.tool?.tenet_store
-		await tenetStore!.execute({ content: "Always use strict mode", category: "preference" }, makeCtx())
-		await tenetStore!.execute({ content: "Prefer functional over OOP", category: "preference" }, makeCtx())
+		await tenetStore!.execute(
+			{ content: "Always use strict mode", category: "preference" },
+			makeCtx(),
+		)
+		await tenetStore!.execute(
+			{ content: "Prefer functional over OOP", category: "preference" },
+			makeCtx(),
+		)
 
 		const result = await plugin.tool!.tenet_list!.execute({}, makeCtx())
 		expect(result).toContain("Always use strict mode")
@@ -303,7 +306,10 @@ describe("tenet_list tool", () => {
 
 	test("does not list general or project memories", async () => {
 		const storeTool = plugin.tool?.memory_store
-		await storeTool!.execute({ content: "This is a general fact", category: "knowledge" }, makeCtx())
+		await storeTool!.execute(
+			{ content: "This is a general fact", category: "knowledge" },
+			makeCtx(),
+		)
 
 		const result = await plugin.tool!.tenet_list!.execute({}, makeCtx())
 		expect(result).toBe("No tenets stored yet.")
@@ -333,7 +339,10 @@ describe("memory_store auto-scope", () => {
 		const storeTool = projectPlugin.tool?.memory_store
 		await storeTool!.execute({ content: "Repo-specific fact", category: "project" }, makeCtx())
 
-		const results = await backend.search("repo-specific", { scope: "project", projectKey: "my-repo-hash-abc" })
+		const results = await backend.search("repo-specific", {
+			scope: "project",
+			projectKey: "my-repo-hash-abc",
+		})
 		expect(results.length).toBeGreaterThan(0)
 	})
 })
@@ -349,7 +358,12 @@ describe("memory_load tool", () => {
 	})
 
 	test("returns raw file content after storing entries", async () => {
-		await backend.store({ content: "Cross-project tooling fact", category: "knowledge", scope: "general", source: "agent" })
+		await backend.store({
+			content: "Cross-project tooling fact",
+			category: "knowledge",
+			scope: "general",
+			source: "agent",
+		})
 		const result = await plugin.tool!.memory_load!.execute({ scope: "general" }, makeCtx())
 		expect(result).toContain("Cross-project tooling fact")
 	})
@@ -364,7 +378,13 @@ describe("memory_load tool", () => {
 			$: {},
 		} as unknown as PluginInput
 		const projectPlugin = await createMemoryPlugin(backend)(projectStub)
-		await backend.store({ content: "Repo detail", category: "project", scope: "project", projectKey: "proj-hash-xyz", source: "agent" })
+		await backend.store({
+			content: "Repo detail",
+			category: "project",
+			scope: "project",
+			projectKey: "proj-hash-xyz",
+			source: "agent",
+		})
 		const result = await projectPlugin.tool!.memory_load!.execute({ scope: "project" }, makeCtx())
 		expect(result).toContain("Repo detail")
 	})
@@ -376,7 +396,12 @@ describe("memory_compact tool", () => {
 	})
 
 	test("overwrites general scope with new content", async () => {
-		await backend.store({ content: "Old general fact", category: "knowledge", scope: "general", source: "agent" })
+		await backend.store({
+			content: "Old general fact",
+			category: "knowledge",
+			scope: "general",
+			source: "agent",
+		})
 		const compactResult = await plugin.tool!.memory_compact!.execute(
 			{ scope: "general", content: "Synthesized compact general memory" },
 			makeCtx(),
@@ -387,7 +412,12 @@ describe("memory_compact tool", () => {
 	})
 
 	test("overwrites tenet scope with new content", async () => {
-		await backend.store({ content: "Old tenet", category: "preference", scope: "tenet", source: "agent" })
+		await backend.store({
+			content: "Old tenet",
+			category: "preference",
+			scope: "tenet",
+			source: "agent",
+		})
 		const result = await plugin.tool!.memory_compact!.execute(
 			{ scope: "tenet", content: "New compact tenet content" },
 			makeCtx(),
