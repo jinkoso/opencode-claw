@@ -275,7 +275,6 @@ export function createTxtMemoryBackend(directory: string): MemoryBackend {
 			}
 		},
 
-
 		async load(scope: MemoryScope, projectKey?: string): Promise<string> {
 			return readFile(filepath(scope, projectKey))
 		},

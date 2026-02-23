@@ -130,7 +130,9 @@ function createMemoryPlugin(backend: MemoryBackend, projectKey?: string): Plugin
 						"Use memory_search first to find the id of the entry to remove. " +
 						"Useful for pruning stale or incorrect memories before compaction.",
 					args: {
-						id: z.string().describe("The id of the memory entry to delete (from memory_search results)"),
+						id: z
+							.string()
+							.describe("The id of the memory entry to delete (from memory_search results)"),
 					},
 					execute: async ({ id }) => {
 						await backend.delete(id as string)
@@ -150,7 +152,9 @@ function createMemoryPlugin(backend: MemoryBackend, projectKey?: string): Plugin
 						projectKey: z
 							.string()
 							.optional()
-							.describe("Project key override (defaults to current project). Only used when scope='project'."),
+							.describe(
+								"Project key override (defaults to current project). Only used when scope='project'.",
+							),
 					},
 					execute: async ({ scope, projectKey: pk }) => {
 						const key = pk ?? (scope === "project" ? resolvedProjectKey : undefined)
@@ -166,16 +170,14 @@ function createMemoryPlugin(backend: MemoryBackend, projectKey?: string): Plugin
 						"Three-pass order: project (per project touched) → general → tenet. " +
 						"Content contracts: project = repo-specific facts; general = cross-project/org knowledge; tenet = dev habits/standards only.",
 					args: {
-						scope: z
-							.enum(["tenet", "project", "general"] as const)
-							.describe("Scope to overwrite"),
-						content: z
-							.string()
-							.describe("Full synthesized content to replace the scope file with"),
+						scope: z.enum(["tenet", "project", "general"] as const).describe("Scope to overwrite"),
+						content: z.string().describe("Full synthesized content to replace the scope file with"),
 						projectKey: z
 							.string()
 							.optional()
-							.describe("Project key override (defaults to current project). Only used when scope='project'."),
+							.describe(
+								"Project key override (defaults to current project). Only used when scope='project'.",
+							),
 					},
 					execute: async ({ scope, content, projectKey: pk }) => {
 						const key = pk ?? (scope === "project" ? resolvedProjectKey : undefined)
@@ -195,7 +197,6 @@ function createMemoryPlugin(backend: MemoryBackend, projectKey?: string): Plugin
 					},
 				}),
 			},
-
 
 			"experimental.chat.system.transform": async (_hookInput, output) => {
 				// 1. Inject tenets as text — always, full list
@@ -238,7 +239,7 @@ function createMemoryPlugin(backend: MemoryBackend, projectKey?: string): Plugin
 					: ""
 				output.system.push(
 					"\n\n## Memory",
-				"\nYou have persistent memory tools: **memory_search**, **memory_store**, **memory_delete**, **memory_load**, **memory_compact**, **memory_session_projects**, **tenet_store**, **tenet_list**.",
+					"\nYou have persistent memory tools: **memory_search**, **memory_store**, **memory_delete**, **memory_load**, **memory_compact**, **memory_session_projects**, **tenet_store**, **tenet_list**.",
 					`\n\nAt the start of each session or when working on a project, call \`memory_search\` to load relevant context.${projectHint}`,
 					"\nAfter completing tasks, call `memory_store` for every new fact learned (one fact per call).",
 					"\nFor permanent rules or preferences, use `tenet_store` — tenets are always injected into every session.",

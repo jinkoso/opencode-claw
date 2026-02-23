@@ -20,12 +20,15 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 
 	let state: ChannelStatus = "disconnected"
 	let handler: InboundMessageHandler | undefined
+	let botUserId: string | undefined
 
 	const reconnector = createReconnector({
 		name: "slack",
 		logger,
 		connect: async () => {
 			state = "connecting"
+			const auth = await app.client.auth.test()
+			botUserId = auth.user_id
 			await app.start()
 			state = "connected"
 			reconnector.reset()
@@ -38,6 +41,21 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		if (!("text" in message) || !message.text) return
 		if ("bot_id" in message && message.bot_id) return
 		if (!("user" in message) || !message.user) return
+
+		const channelId = "channel" in message ? (message.channel as string) : undefined
+		if (!channelId) return
+
+		// In channels (not DMs), only reply if mentioned
+		if (!channelId.startsWith("D")) {
+			if (!botUserId) {
+				// Should not happen if started correctly
+				const auth = await app.client.auth.test()
+				botUserId = auth.user_id
+			}
+			if (botUserId && !message.text.includes(`<@${botUserId}>`)) {
+				return
+			}
+		}
 
 		const peerId = message.user
 		const channel = "channel" in message ? (message.channel as string) : undefined
@@ -80,6 +98,8 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 			handler = h
 			state = "connecting"
 			logger.info("slack: starting app", { mode: config.mode })
+			const auth = await app.client.auth.test()
+			botUserId = auth.user_id
 			await app.start()
 			state = "connected"
 			logger.info("slack: app connected")

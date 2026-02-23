@@ -190,7 +190,11 @@ export function createOpenVikingBackend(
 			throw new Error("OpenViking backend does not support load(); use txt fallback")
 		},
 
-		async replace(scope: MemoryScope, projectKey: string | undefined, content: string): Promise<void> {
+		async replace(
+			scope: MemoryScope,
+			projectKey: string | undefined,
+			content: string,
+		): Promise<void> {
 			if (fallback) return fallback.replace(scope, projectKey, content)
 			throw new Error("OpenViking backend does not support replace(); use txt fallback")
 		},
