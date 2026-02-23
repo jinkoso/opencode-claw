@@ -55,9 +55,15 @@ const HELP_TEXT = `Available commands:
 /switch <id> — Switch to an existing session
 /sessions [page] — List your sessions (paginated)
 /current — Show current session
+/status — Show current agent run status
 /fork — Fork current session into a new one
 /cancel — Abort the currently running agent
 /help — Show this help`
+
+type ActiveStreamMeta = {
+	startedAt: number
+	lastTool: string | undefined
+}
 
 // peerKey uniquely identifies a peer within a channel for active-stream tracking
 function peerKey(channel: ChannelId, peerId: string): string {
@@ -69,6 +75,7 @@ async function handleCommand(
 	msg: InboundMessage,
 	deps: RouterDeps,
 	activeStreams: Map<string, string>,
+	activeStreamsMeta: Map<string, ActiveStreamMeta>,
 ): Promise<string> {
 	const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
 	switch (cmd.name) {
@@ -124,6 +131,18 @@ async function handleCommand(
 			deps.logger.info("router: session aborted by user", { sessionId, aborted })
 			return aborted ? "Agent aborted." : "Abort request sent (agent may already be done)."
 		}
+		case "status": {
+			const pk = peerKey(msg.channel, msg.peerId)
+			const sessionId = activeStreams.get(pk)
+			if (!sessionId) return "No agent is currently running."
+			const meta = activeStreamsMeta.get(pk)
+			const elapsedSec = meta ? Math.floor((Date.now() - meta.startedAt) / 1000) : 0
+			const mins = Math.floor(elapsedSec / 60)
+			const secs = elapsedSec % 60
+			const elapsed = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+			const tool = meta?.lastTool ? ` — last tool: ${humanizeToolName(meta.lastTool)}` : ""
+			return `⏳ Agent is running (${elapsed} elapsed${tool})`
+		}
 		case "help": {
 			return HELP_TEXT
 		}
@@ -147,6 +166,7 @@ async function routeMessage(
 	msg: InboundMessage,
 	deps: RouterDeps,
 	activeStreams: Map<string, string>,
+	activeStreamsMeta: Map<string, ActiveStreamMeta>,
 	pendingQuestions: Map<string, QuestionResolver>,
 ): Promise<void> {
 	const adapter = deps.adapters.get(msg.channel)
@@ -171,7 +191,7 @@ async function routeMessage(
 	// Command interception
 	const cmd = parseCommand(msg.text)
 	if (cmd) {
-		const reply = await handleCommand(cmd, msg, deps, activeStreams)
+		const reply = await handleCommand(cmd, msg, deps, activeStreams, activeStreamsMeta)
 		await adapter.send(msg.peerId, { text: reply, replyToId: msg.replyToId })
 		return
 	}
@@ -184,6 +204,7 @@ async function routeMessage(
 
 	const pk = peerKey(msg.channel, msg.peerId)
 	activeStreams.set(pk, sessionId)
+	activeStreamsMeta.set(pk, { startedAt: Date.now(), lastTool: undefined })
 	// Start typing indicator
 	if (adapter.sendTyping) {
 		await adapter.sendTyping(msg.peerId).catch(() => {})
@@ -224,11 +245,14 @@ async function routeMessage(
 
 	const progress: ProgressOptions | undefined = progressEnabled
 		? {
-				onToolRunning: (_tool, title) =>
-					adapter.send(msg.peerId, {
+				onToolRunning: (_tool, title) => {
+					const meta = activeStreamsMeta.get(pk)
+					if (meta) meta.lastTool = title
+					return adapter.send(msg.peerId, {
 						text: `🔧 ${humanizeToolName(title)}...`,
 						replyToId: msg.replyToId,
-					}),
+					})
+				},
 				onHeartbeat: async () => {
 					if (adapter.sendTyping) {
 						await adapter.sendTyping(msg.peerId).catch(() => {})
@@ -270,6 +294,7 @@ async function routeMessage(
 		throw err
 	} finally {
 		activeStreams.delete(pk)
+		activeStreamsMeta.delete(pk)
 		pendingQuestions.delete(pk)
 		if (adapter.stopTyping) {
 			await adapter.stopTyping(msg.peerId).catch(() => {})
@@ -288,6 +313,8 @@ async function routeMessage(
 export function createRouter(deps: RouterDeps) {
 	// Tracks which sessionId is currently streaming for each channel:peerId pair
 	const activeStreams = new Map<string, string>()
+	// Tracks timing + last tool for each active stream
+	const activeStreamsMeta = new Map<string, ActiveStreamMeta>()
 	// Tracks pending question resolvers — when agent asks a question, user's next message resolves it
 	const pendingQuestions = new Map<string, QuestionResolver>()
 	async function handler(msg: InboundMessage): Promise<void> {
@@ -302,7 +329,7 @@ export function createRouter(deps: RouterDeps) {
 				return
 			}
 
-			await routeMessage(msg, deps, activeStreams, pendingQuestions)
+			await routeMessage(msg, deps, activeStreams, activeStreamsMeta, pendingQuestions)
 		} catch (err) {
 			deps.logger.error("router: unhandled error", {
 				channel: msg.channel,
