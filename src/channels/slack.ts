@@ -2,6 +2,7 @@ import { App } from "@slack/bolt"
 import type { SlackConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
 import { createReconnector } from "../utils/reconnect.js"
+import { splitMessage } from "./split-message.js"
 import type {
 	ChannelAdapter,
 	ChannelStatus,
@@ -92,11 +93,14 @@ export function createSlackAdapter(config: SlackConfig, logger: Logger): Channel
 		},
 
 		async send(peerId, message: OutboundMessage) {
-			await app.client.chat.postMessage({
-				channel: peerId,
-				text: message.text,
-				thread_ts: message.threadId,
-			})
+			const chunks = splitMessage(message.text, 40000)
+			for (const chunk of chunks) {
+				await app.client.chat.postMessage({
+					channel: peerId,
+					text: chunk,
+					thread_ts: message.threadId,
+				})
+			}
 		},
 		async sendTyping(_peerId) {
 			// Slack has no general bot typing indicator API

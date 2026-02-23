@@ -2,6 +2,7 @@ import { Bot } from "grammy"
 import type { TelegramConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
 import { createReconnector } from "../utils/reconnect.js"
+import { splitMessage } from "./split-message.js"
 import type {
 	ChannelAdapter,
 	ChannelStatus,
@@ -87,9 +88,14 @@ export function createTelegramAdapter(config: TelegramConfig, logger: Logger): C
 		},
 
 		async send(peerId, message: OutboundMessage) {
-			await bot.api.sendMessage(Number(peerId), message.text, {
-				reply_parameters: message.replyToId ? { message_id: Number(message.replyToId) } : undefined,
-			})
+			const chunks = splitMessage(message.text, 4096)
+			for (const chunk of chunks) {
+				await bot.api.sendMessage(Number(peerId), chunk, {
+					reply_parameters: message.replyToId
+						? { message_id: Number(message.replyToId) }
+						: undefined,
+				})
+			}
 		},
 		async sendTyping(peerId) {
 			await bot.api.sendChatAction(Number(peerId), "typing")

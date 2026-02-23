@@ -7,6 +7,7 @@ import {
 } from "@whiskeysockets/baileys"
 import type { WhatsAppConfig } from "../config/types.js"
 import type { Logger } from "../utils/logger.js"
+import { splitMessage } from "./split-message.js"
 import type {
 	ChannelAdapter,
 	ChannelStatus,
@@ -166,7 +167,10 @@ export function createWhatsAppAdapter(config: WhatsAppConfig, logger: Logger): C
 		async send(peerId, message: OutboundMessage) {
 			if (!sock) throw new Error("WhatsApp socket not connected")
 			const jid = `${peerId}@s.whatsapp.net`
-			await sock.sendMessage(jid, { text: message.text })
+			const chunks = splitMessage(message.text, 65536)
+			for (const chunk of chunks) {
+				await sock.sendMessage(jid, { text: chunk })
+			}
 		},
 		async sendTyping(peerId) {
 			if (!sock) return
