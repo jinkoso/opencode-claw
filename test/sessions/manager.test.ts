@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { buildSessionKey, createSessionManager } from "../../src/sessions/manager.js"
 import type { SessionInfo } from "../../src/sessions/manager.js"
 
-
 function makeClient(
 	sessions: Array<{ id: string; title: string; time: { created: number; updated: number } }>,
 ) {
@@ -18,7 +17,6 @@ function makeClient(
 
 const noop = () => {}
 const logger = { debug: noop, info: noop, warn: noop, error: noop }
-
 
 const config = { persistPath: "/dev/null" } as never
 

@@ -49,10 +49,11 @@ function parseCommand(text: string): Command | undefined {
 	return { name: trimmed.slice(1, space).toLowerCase(), args: trimmed.slice(space + 1).trim() }
 }
 
+const PAGE_SIZE = 10
 const HELP_TEXT = `Available commands:
 /new [title] — Create a new session
 /switch <id> — Switch to an existing session
-/sessions — List your sessions
+/sessions [page] — List your sessions (paginated)
 /current — Show current session
 /fork — Fork current session into a new one
 /cancel — Abort the currently running agent
@@ -70,8 +71,6 @@ async function handleCommand(
 	activeStreams: Map<string, string>,
 ): Promise<string> {
 	const key = buildSessionKey(msg.channel, msg.peerId, msg.threadId)
-
-
 	switch (cmd.name) {
 		case "new": {
 			const id = await deps.sessions.newSession(key, cmd.args || undefined)
@@ -85,12 +84,20 @@ async function handleCommand(
 		case "sessions": {
 			const list = await deps.sessions.listSessions(key)
 			if (list.length === 0) return "No sessions found."
-			return list
-				.map((s) => {
-					const marker = s.active ? " (active)" : ""
-					return `• ${s.id} — ${s.title}${marker}`
-				})
-				.join("\n")
+			const page = Math.max(1, Number.parseInt(cmd.args) || 1)
+			const totalPages = Math.ceil(list.length / PAGE_SIZE)
+			const clamped = Math.min(page, totalPages)
+			const slice = list.slice((clamped - 1) * PAGE_SIZE, clamped * PAGE_SIZE)
+			const lines = slice.map((s) => {
+				const marker = s.active ? " (active)" : ""
+				return `• ${s.id} — ${s.title}${marker}`
+			})
+			if (totalPages > 1) {
+				lines.push(
+					`\nPage ${clamped}/${totalPages}${clamped < totalPages ? ` — use /sessions ${clamped + 1} for next` : ""}`,
+				)
+			}
+			return lines.join("\n")
 		}
 		case "current": {
 			const id = deps.sessions.currentSession(key)
