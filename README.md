@@ -327,11 +327,8 @@ Any non-command message is routed to the active OpenCode session as a prompt.
 ## Programmatic API
 
 Use opencode-claw as a library in your own Node.js application:
-
 ```typescript
-import { main, createMemoryBackend } from "opencode-claw"
-
-// Run the full service programmatically
+import { main, createMemoryBackend } from "opencode-claw/lib"
 await main()
 ```
 
@@ -358,23 +355,30 @@ import type {
   ChannelId,
   InboundMessage,
   OutboundMessage,
-} from "opencode-claw"
+} from "opencode-claw/lib"
 ```
 
 ### Standalone Memory Plugin
 
-Use the memory plugin with a vanilla OpenCode installation (without the rest of opencode-claw):
+The memory plugin can be used with a vanilla OpenCode installation (without the rest of opencode-claw). Add the package name to the `plugin` array in your `opencode.json`:
+
+```json
+{
+  "plugin": ["opencode-claw"]
+}
+```
+
+OpenCode will install the package automatically on next startup and load the memory plugin.
+
+Or wire it programmatically via the SDK:
 
 ```typescript
-import { memoryPlugin } from "opencode-claw/plugin"
 import { createOpencode } from "@opencode-ai/sdk"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { dirname } from "node:path"
-
 const dir = dirname(fileURLToPath(import.meta.url))
 const pluginPath = `file://${resolve(dir, "node_modules/opencode-claw/dist/memory/plugin-entry.js")}`
-
 const { client, server } = await createOpencode({
   config: { plugin: [pluginPath] },
 })
