@@ -1,4 +1,4 @@
-import type { OpencodeClient, QuestionRequest } from "@opencode-ai/sdk/v2"
+import type { OpencodeClient, QuestionRequest, Todo } from "@opencode-ai/sdk/v2"
 import type { Config } from "../config/types.js"
 import type { SessionManager } from "../sessions/manager.js"
 import { buildSessionKey } from "../sessions/manager.js"
@@ -158,6 +158,21 @@ function humanizeToolName(raw: string): string {
 	return raw.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+function formatTodoList(todos: Todo[]): string {
+	if (todos.length === 0) return "📋 Todo list cleared."
+	const icons: Record<string, string> = {
+		completed: "✅",
+		in_progress: "🔄",
+		pending: "⬜",
+		cancelled: "❌",
+	}
+	const lines = todos.map((t) => {
+		const icon = icons[t.status] ?? "•"
+		return `${icon} [${t.priority}] ${t.content}`
+	})
+	return `📋 **Todos**\n${lines.join("\n")}`
+}
+
 type QuestionResolver = {
 	resolve: (text: string) => void
 	timeout: ReturnType<typeof setTimeout>
@@ -267,6 +282,10 @@ async function routeMessage(
 				},
 				toolThrottleMs: deps.config.router.progress.toolThrottleMs,
 				heartbeatMs: deps.config.router.progress.heartbeatMs,
+				onTodoUpdated: async (todos) => {
+					const text = formatTodoList(todos)
+					await adapter.send(msg.peerId, { text })
+				},
 			}
 		: undefined
 	let reply: string

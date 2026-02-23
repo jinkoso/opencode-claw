@@ -1,3 +1,4 @@
+import { dirname, isAbsolute, resolve } from "node:path"
 import { fileExists, readJsonFile } from "../compat.js"
 import { configSchema } from "./schema.js"
 import type { Config } from "./types.js"
@@ -23,13 +24,13 @@ function expandDeep(obj: unknown): unknown {
 	return obj
 }
 
-const searchPaths = [
-	process.env.OPENCODE_CLAW_CONFIG,
-	"./opencode-claw.json",
-	`${process.env.HOME}/.config/opencode-claw/config.json`,
-].filter(Boolean) as string[]
-
 export async function loadConfig(): Promise<Config> {
+	const searchPaths = [
+		process.env.OPENCODE_CLAW_CONFIG,
+		"./opencode-claw.json",
+		`${process.env.HOME}/.config/opencode-claw/config.json`,
+	].filter(Boolean) as string[]
+
 	let raw: unknown = null
 	let found = ""
 
@@ -54,7 +55,6 @@ export async function loadConfig(): Promise<Config> {
 
 	const expanded = expandDeep(raw)
 	const result = configSchema.safeParse(expanded)
-
 	if (!result.success) {
 		const errors = result.error.issues
 			.map((i) => `  - ${i.path.join(".")}: ${i.message}`)
@@ -62,5 +62,19 @@ export async function loadConfig(): Promise<Config> {
 		throw new Error(`Config validation failed (${found}):\n${errors}`)
 	}
 
-	return result.data
+	const data = result.data
+	const base = dirname(resolve(found))
+
+	function resolvePath(p: string): string {
+		return isAbsolute(p) ? p : resolve(base, p)
+	}
+
+	data.memory.txt.directory = resolvePath(data.memory.txt.directory)
+	data.sessions.persistPath = resolvePath(data.sessions.persistPath)
+	data.outbox.directory = resolvePath(data.outbox.directory)
+	if (data.channels.whatsapp) {
+		data.channels.whatsapp.authDir = resolvePath(data.channels.whatsapp.authDir)
+	}
+
+	return data
 }

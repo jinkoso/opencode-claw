@@ -1,14 +1,16 @@
-import type { Event, OpencodeClient, QuestionRequest } from "@opencode-ai/sdk/v2"
+import type { Event, OpencodeClient, QuestionRequest, Todo } from "@opencode-ai/sdk/v2"
 import type { Logger } from "../utils/logger.js"
 
 export type ToolProgressCallback = (tool: string, title: string) => Promise<void>
 export type HeartbeatCallback = () => Promise<void>
 export type QuestionCallback = (question: QuestionRequest) => Promise<Array<Array<string>>>
+export type TodoUpdatedCallback = (todos: Todo[]) => Promise<void>
 
 export type ProgressOptions = {
 	onToolRunning?: ToolProgressCallback
 	onHeartbeat?: HeartbeatCallback
 	onQuestion?: QuestionCallback
+	onTodoUpdated?: TodoUpdatedCallback
 	toolThrottleMs?: number
 	heartbeatMs?: number
 }
@@ -109,6 +111,15 @@ export async function promptStreaming(
 					}
 				} else {
 					await client.question.reject({ requestID: request.id })
+				}
+				continue
+			}
+			if (event.type === "todo.updated") {
+				const { sessionID, todos } = event.properties
+				if (sessionID !== sessionId) continue
+				if (progress?.onTodoUpdated) {
+					await progress.onTodoUpdated(todos).catch(() => {})
+					touchActivity()
 				}
 				continue
 			}

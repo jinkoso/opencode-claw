@@ -136,17 +136,21 @@ describe("experimental.chat.system.transform hook", () => {
 		expect(plugin["experimental.chat.system.transform"]).toBeDefined()
 	})
 
-	test("always injects memory instructions even when memory is empty", async () => {
+	test("injects memory instructions even when memory is empty", async () => {
 		const transform = plugin["experimental.chat.system.transform"] as (
 			input: unknown,
 			output: { system: string[] },
 		) => Promise<void>
 		const output = { system: [] as string[] }
 		await transform({}, output)
-		expect(output.system).toHaveLength(1)
-		expect(output.system[0]).toContain("Memory Instructions")
+		// Multiple strings are pushed: at minimum the instruction block items
+		expect(output.system.length).toBeGreaterThan(0)
+		const joined = output.system.join("")
+		expect(joined).toContain("Memory")
+		expect(joined).toContain("memory_search")
+		expect(joined).toContain("memory_store")
+		expect(joined).toContain("MANDATORY")
 	})
-
 	test("injects relevant memories into output.system when entries exist", async () => {
 		// Store something with terms that match the default "recent context" query
 		await backend.store({
@@ -162,10 +166,38 @@ describe("experimental.chat.system.transform hook", () => {
 
 		const output = { system: [] as string[] }
 		await transform({}, output)
-
 		// If relevant memories were found, a block is pushed
 		// (may be empty if minRelevance 0.05 filters everything — acceptable)
 		// Just verify it doesn't throw and output.system is an array
 		expect(Array.isArray(output.system)).toBe(true)
+	})
+})
+
+describe("experimental.session.compacting hook", () => {
+	test("is registered on the plugin", () => {
+		expect(plugin["experimental.session.compacting"]).toBeDefined()
+	})
+
+	test("pushes a flush instruction into output.context", async () => {
+		const hook = plugin["experimental.session.compacting"] as (
+			input: { sessionID: string },
+			output: { context: string[]; prompt?: string },
+		) => Promise<void>
+		const output = { context: [] as string[] }
+		await hook({ sessionID: "ses-test" }, output)
+		expect(output.context.length).toBe(1)
+		const msg = output.context[0]!
+		expect(msg).toContain("memory_store")
+		expect(msg).toContain("MANDATORY")
+	})
+
+	test("does not modify output.prompt", async () => {
+		const hook = plugin["experimental.session.compacting"] as (
+			input: { sessionID: string },
+			output: { context: string[]; prompt?: string },
+		) => Promise<void>
+		const output: { context: string[]; prompt?: string } = { context: [] }
+		await hook({ sessionID: "ses-test" }, output)
+		expect(output.prompt).toBeUndefined()
 	})
 })

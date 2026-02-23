@@ -172,7 +172,6 @@ describe("/sessions pagination", () => {
 	})
 })
 
-
 // --- /status tests ---
 
 describe("/status command", () => {
@@ -185,7 +184,7 @@ describe("/status command", () => {
 
 	test("active stream, no tool yet: reports elapsed time in seconds", async () => {
 		const { adapter, sent } = makeAdapter()
-		const adapters = new Map<ChannelId, ChannelAdapter>(([["telegram", adapter]]))
+		const adapters = new Map<ChannelId, ChannelAdapter>([["telegram", adapter]])
 
 		// A never-resolving stream to keep the agent "running"
 		let streamResolve: () => void
@@ -239,7 +238,9 @@ describe("/status command", () => {
 		const statusSent: OutboundMessage[] = []
 		const statusAdapter: ChannelAdapter = {
 			...adapter,
-			send: async (_peerId, msg) => { statusSent.push(msg) },
+			send: async (_peerId, msg) => {
+				statusSent.push(msg)
+			},
 		}
 		deps.adapters.set("telegram", statusAdapter)
 		await handler(makeMsg("/status"))
@@ -254,10 +255,12 @@ describe("/status command", () => {
 
 	test("active stream with lastTool: includes tool name", async () => {
 		const { adapter, sent } = makeAdapter()
-		const adapters = new Map<ChannelId, ChannelAdapter>(([["telegram", adapter]]))
+		const adapters = new Map<ChannelId, ChannelAdapter>([["telegram", adapter]])
 
 		let streamResolve: () => void
-		const streamDone = new Promise<void>((res) => { streamResolve = res })
+		const streamDone = new Promise<void>((res) => {
+			streamResolve = res
+		})
 
 		// Emit one tool event then hang
 		let iterCount = 0
@@ -324,7 +327,9 @@ describe("/status command", () => {
 		const statusSent: OutboundMessage[] = []
 		const statusAdapter: ChannelAdapter = {
 			...adapter,
-			send: async (_peerId, msg) => { statusSent.push(msg) },
+			send: async (_peerId, msg) => {
+				statusSent.push(msg)
+			},
 		}
 		deps.adapters.set("telegram", statusAdapter)
 		await handler(makeMsg("/status"))
@@ -351,5 +356,151 @@ describe("/status command", () => {
 			const elapsed = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
 			expect(elapsed).toMatch(new RegExp(pattern))
 		}
+	})
+})
+// --- todo forwarding tests ---
+
+describe("todo forwarding", () => {
+	type StreamEvent = { type: string; properties: Record<string, unknown> }
+
+	function makeStream(events: StreamEvent[]) {
+		let idx = 0
+		return {
+			[Symbol.asyncIterator]() {
+				return {
+					next(): Promise<IteratorResult<StreamEvent>> {
+						const event = events[idx++]
+						if (event) return Promise.resolve({ done: false, value: event })
+						return Promise.resolve({ done: true as const, value: undefined as never })
+					},
+					return() {
+						return Promise.resolve({ done: true as const, value: undefined as never })
+					},
+				}
+			},
+		}
+	}
+
+	function makeTodoDeps(stream: ReturnType<typeof makeStream>, progressEnabled: boolean) {
+		const { adapter, sent } = makeAdapter()
+		const adapters = new Map<ChannelId, ChannelAdapter>([["telegram", adapter]])
+		const deps = {
+			client: {
+				event: { subscribe: async () => ({ stream }) },
+				session: { promptAsync: async () => {} },
+			} as never,
+			sessions: {
+				resolveSession: async () => "ses-todo",
+				currentSession: () => undefined,
+				newSession: async () => "ses-new",
+				switchSession: async () => {},
+				listSessions: async () => [],
+			} as never,
+			adapters,
+			config: {
+				channels: { telegram: {} },
+				router: { progress: { enabled: progressEnabled, toolThrottleMs: 0, heartbeatMs: 0 } },
+			} as never,
+			logger,
+			timeoutMs: 5000,
+		}
+		return { deps, sent }
+	}
+
+	const IDLE_EVENT: StreamEvent = {
+		type: "session.idle",
+		properties: { sessionID: "ses-todo" },
+	}
+
+	test("todo.updated sends formatted list when progress enabled", async () => {
+		const todoEvent: StreamEvent = {
+			type: "todo.updated",
+			properties: {
+				sessionID: "ses-todo",
+				todos: [
+					{ content: "Write tests", status: "in_progress", priority: "high" },
+					{ content: "Deploy", status: "pending", priority: "medium" },
+				],
+			},
+		}
+		const stream = makeStream([todoEvent, IDLE_EVENT])
+		const { deps, sent } = makeTodoDeps(stream, true)
+		const { handler } = createRouter(deps)
+		await handler(makeMsg("hello"))
+		const todoMsg = sent.find((m) => m.text?.startsWith("📋"))
+		expect(todoMsg).toBeDefined()
+		expect(todoMsg?.text).toContain("🔄 [high] Write tests")
+		expect(todoMsg?.text).toContain("⬜ [medium] Deploy")
+	})
+
+	test("todo.updated not sent when progress disabled", async () => {
+		const todoEvent: StreamEvent = {
+			type: "todo.updated",
+			properties: {
+				sessionID: "ses-todo",
+				todos: [{ content: "Task A", status: "pending", priority: "low" }],
+			},
+		}
+		const stream = makeStream([todoEvent, IDLE_EVENT])
+		const { deps, sent } = makeTodoDeps(stream, false)
+		const { handler } = createRouter(deps)
+		await handler(makeMsg("hello"))
+		const todoMsg = sent.find((m) => m.text?.startsWith("📋"))
+		expect(todoMsg).toBeUndefined()
+	})
+
+	test("empty todos sends cleared message", async () => {
+		const todoEvent: StreamEvent = {
+			type: "todo.updated",
+			properties: { sessionID: "ses-todo", todos: [] },
+		}
+		const stream = makeStream([todoEvent, IDLE_EVENT])
+		const { deps, sent } = makeTodoDeps(stream, true)
+		const { handler } = createRouter(deps)
+		await handler(makeMsg("hello"))
+		const todoMsg = sent.find((m) => m.text === "📋 Todo list cleared.")
+		expect(todoMsg).toBeDefined()
+	})
+
+	test("all status icons render correctly", async () => {
+		const todoEvent: StreamEvent = {
+			type: "todo.updated",
+			properties: {
+				sessionID: "ses-todo",
+				todos: [
+					{ content: "A", status: "completed", priority: "high" },
+					{ content: "B", status: "in_progress", priority: "high" },
+					{ content: "C", status: "pending", priority: "low" },
+					{ content: "D", status: "cancelled", priority: "low" },
+					{ content: "E", status: "unknown", priority: "low" },
+				],
+			},
+		}
+		const stream = makeStream([todoEvent, IDLE_EVENT])
+		const { deps, sent } = makeTodoDeps(stream, true)
+		const { handler } = createRouter(deps)
+		await handler(makeMsg("hello"))
+		const todoMsg = sent.find((m) => m.text?.startsWith("📋"))
+		expect(todoMsg?.text).toContain("✅ [high] A")
+		expect(todoMsg?.text).toContain("🔄 [high] B")
+		expect(todoMsg?.text).toContain("⬜ [low] C")
+		expect(todoMsg?.text).toContain("❌ [low] D")
+		expect(todoMsg?.text).toContain("• [low] E")
+	})
+
+	test("todo.updated for different session is ignored", async () => {
+		const todoEvent: StreamEvent = {
+			type: "todo.updated",
+			properties: {
+				sessionID: "ses-other",
+				todos: [{ content: "Foreign task", status: "pending", priority: "low" }],
+			},
+		}
+		const stream = makeStream([todoEvent, IDLE_EVENT])
+		const { deps, sent } = makeTodoDeps(stream, true)
+		const { handler } = createRouter(deps)
+		await handler(makeMsg("hello"))
+		const todoMsg = sent.find((m) => m.text?.startsWith("📋"))
+		expect(todoMsg).toBeUndefined()
 	})
 })
