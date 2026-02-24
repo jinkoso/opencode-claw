@@ -272,6 +272,7 @@ async function routeMessage(
 					return adapter.send(msg.peerId, {
 						text: `🔧 ${humanizeToolName(title)}...`,
 						replyToId: msg.replyToId,
+						threadId: msg.threadId,
 					})
 				},
 				onHeartbeat: async () => {
@@ -365,8 +366,10 @@ export function createRouter(deps: RouterDeps) {
 			// Best-effort error reply
 			const adapter = deps.adapters.get(msg.channel)
 			if (adapter) {
-				await adapter
-					.send(msg.peerId, { text: "An internal error occurred. Please try again." })
+				await adapter.send(msg.peerId, {
+					text: "An internal error occurred. Please try again.",
+					threadId: msg.threadId,
+				})
 					.catch(() => {})
 			}
 		}

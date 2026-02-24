@@ -37,7 +37,7 @@ export async function main() {
 	logger.info("opencode: starting server...", { plugins: [pluginPath] })
 	const { client, server } = await createOpencode({
 		port: config.opencode.port,
-		config: { plugin: [pluginPath] },
+		config: { plugin: [pluginPath], provider: config.opencode.provider },
 	})
 	logger.info("opencode: server ready")
 

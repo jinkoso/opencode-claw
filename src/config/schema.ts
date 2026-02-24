@@ -76,6 +76,7 @@ export const configSchema = z.object({
 			configPath: z.string().optional(),
 			port: z.number().int().min(0).default(0),
 			directory: z.string().optional(),
+			provider: z.record(z.any()).optional(),
 		})
 		.default({}),
 	memory: memorySchema.default({ backend: "txt" }),
