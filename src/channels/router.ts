@@ -77,7 +77,7 @@ async function handleCommand(
 	activeStreams: Map<string, string>,
 	activeStreamsMeta: Map<string, ActiveStreamMeta>,
 ): Promise<string> {
-	const sessionThreadId = msg.channel === "slack" ? undefined : msg.threadId
+	const sessionThreadId = msg.threadId
 	const key = buildSessionKey(msg.channel, msg.peerId, sessionThreadId)
 	switch (cmd.name) {
 		case "new": {
@@ -217,7 +217,7 @@ async function routeMessage(
 	}
 
 	// Resolve or create session
-	const sessionThreadId = msg.channel === "slack" ? undefined : msg.threadId
+	const sessionThreadId = msg.threadId
 	const key = buildSessionKey(msg.channel, msg.peerId, sessionThreadId)
 	const sessionId = await deps.sessions.resolveSession(key)
 

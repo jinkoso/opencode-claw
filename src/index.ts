@@ -12,7 +12,7 @@ import { createHealthServer } from "./health/server.js"
 import { createMemoryBackend } from "./memory/factory.js"
 import { createOutboxDrainer } from "./outbox/drainer.js"
 import { createOutboxWriter } from "./outbox/writer.js"
-import { createSessionManager } from "./sessions/manager.js"
+import { buildSessionKey, createSessionManager } from "./sessions/manager.js"
 import { loadSessionMap } from "./sessions/persistence.js"
 import { createLogger } from "./utils/logger.js"
 import { onShutdown, setupShutdown } from "./utils/shutdown.js"
@@ -69,7 +69,12 @@ export async function main() {
 	}
 
 	if (config.channels.slack?.enabled) {
-		const slack = createSlackAdapter(config.channels.slack, logger)
+		const slack = createSlackAdapter(
+			config.channels.slack,
+			logger,
+			(channelId, threadTs) =>
+				sessions.currentSession(buildSessionKey("slack", channelId, threadTs)) !== undefined,
+		)
 		adapters.set("slack", slack)
 		onShutdown(async () => {
 			await slack.stop()
