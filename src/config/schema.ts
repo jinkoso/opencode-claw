@@ -19,6 +19,7 @@ const slackSchema = z.object({
 	rejectionBehavior: z.enum(["ignore", "reject"]).default("ignore"),
 	requireMentionInChannels: z.boolean().default(true),
 	requireMentionInDms: z.boolean().default(false),
+	threadMode: z.boolean().default(true),
 })
 
 const whatsappSchema = z.object({
