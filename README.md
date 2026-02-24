@@ -253,7 +253,8 @@ To connect a Slack bot, you'll need to create an app with Socket Mode enabled.
       "enabled": true,
       "botToken": "${SLACK_BOT_TOKEN}",
       "appToken": "${SLACK_APP_TOKEN}",
-      "mode": "socket"
+      "mode": "socket",
+      "threadMode": true
     }
   }
 }
@@ -270,12 +271,12 @@ To connect a Slack bot, you'll need to create an app with Socket Mode enabled.
 3.  **Configure Events**:
     -   Click **Event Subscriptions** in the sidebar.
     -   Toggle **Enable Events**.
-    -   Subscribe to: `message.im` (DMs), `app_mention` (mentions).
-    -   *(Optional)*: `message.channels` (public channels), `message.groups` (private channels).
+    -   Subscribe to: `message.im` (DMs), `app_mention` (mentions in channels/groups).
+    -   **Required for thread mode**: also subscribe to `message.channels` (public channels) and `message.groups` (private channels/group DMs). Without these, the bot cannot receive follow-up replies in a thread.
     -   **Save Changes**.
 4.  **Configure Permissions**:
     -   Click **OAuth & Permissions** in the sidebar.
-    -   Under **Bot Token Scopes**, add: `chat:write`, `im:history`.
+    -   Under **Bot Token Scopes**, add: `chat:write`, `im:history`, `channels:history`, `groups:history`.
     -   Scroll up and click **Install to Workspace**.
     -   Copy the `xoxb-...` token. This is your **`botToken`**.
 5.  **Enable Messages Tab**:
@@ -283,6 +284,26 @@ To connect a Slack bot, you'll need to create an app with Socket Mode enabled.
     -   Scroll down to **Show Tabs**.
     -   Enable the **Messages Tab** toggle.
     -   **CRITICAL**: Check the box **"Allow users to send Slash commands and messages from the messages tab"**. Without this, the bot cannot receive DMs.
+
+**Thread-Based Sessions (default behavior):**
+
+When `threadMode: true` (the default), each `@mention` in a channel or group chat creates a **new per-thread OpenCode session**. The bot replies in the thread of the original message. Any subsequent message posted in that same thread continues the session — no `@mention` required for follow-ups.
+
+| Scenario | Session |
+|----------|---------|
+| `@bot` in `#general` | New session, bot replies in thread |
+| Follow-up reply in that thread | Same session continues |
+| `@bot` in `#random` | Separate new session |
+| DM to bot | Unchanged — single session per DM |
+
+Set `"threadMode": false` to restore the legacy behavior (one shared session per channel/DM, no thread routing).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `botToken` | string | — | `xoxb-...` Bot User OAuth Token |
+| `appToken` | string | — | `xapp-...` App-Level Token (Socket Mode) |
+| `mode` | string | `"socket"` | Transport mode (`"socket"` is the only supported value) |
+| `threadMode` | boolean | `true` | Create a per-thread session on `@mention`; `false` for legacy per-channel behavior |
 
 #### WhatsApp
 
