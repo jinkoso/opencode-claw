@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createRouter } from "../../src/channels/router.js"
 import type { ChannelAdapter, ChannelId, OutboundMessage } from "../../src/channels/types.js"
+import { buildSessionKey } from "../../src/sessions/manager.js"
 import type { SessionInfo } from "../../src/sessions/manager.js"
 
 const noop = () => {}
@@ -502,5 +503,117 @@ describe("todo forwarding", () => {
 		await handler(makeMsg("hello"))
 		const todoMsg = sent.find((m) => m.text?.startsWith("📋"))
 		expect(todoMsg).toBeUndefined()
+	})
+})
+
+describe("slack thread session routing", () => {
+	function makeSlackAdapter(): { adapter: ChannelAdapter; sent: OutboundMessage[] } {
+		const sent: OutboundMessage[] = []
+		const adapter: ChannelAdapter = {
+			id: "slack" as ChannelId,
+			name: "Slack",
+			start: async () => {},
+			stop: async () => {},
+			send: async (_peerId: string, msg: OutboundMessage) => {
+				sent.push(msg)
+			},
+			status: () => "connected",
+		}
+		return { adapter, sent }
+	}
+
+	function makeSlackMsg(text: string, threadId?: string) {
+		return {
+			channel: "slack" as ChannelId,
+			peerId: "C123",
+			senderId: "U456",
+			groupId: "C123",
+			threadId,
+			text,
+			raw: {},
+		}
+	}
+
+	test("slack command in thread uses thread-scoped session key", async () => {
+		let capturedKey: string | undefined
+		const { adapter } = makeSlackAdapter()
+		const adapters = new Map<ChannelId, ChannelAdapter>([["slack", adapter]])
+		const deps = {
+			client: {} as never,
+			sessions: {
+				listSessions: async (key: string) => {
+					capturedKey = key
+					return [] as SessionInfo[]
+				},
+				switchSession: async () => {},
+				newSession: async () => "new-session-id",
+				currentSession: () => undefined,
+				resolveSession: async () => "some-session",
+			} as never,
+			adapters,
+			config: {
+				channels: { slack: {} },
+				router: { progress: { enabled: false, toolThrottleMs: 0, heartbeatMs: 0 } },
+			} as never,
+			logger,
+			timeoutMs: 5000,
+		}
+		const { handler } = createRouter(deps)
+		await handler(makeSlackMsg("/sessions", "1234567890.123456"))
+		expect(capturedKey).toBe(buildSessionKey("slack", "C123", "1234567890.123456"))
+	})
+
+	test("slack command without thread uses channel-scoped session key", async () => {
+		let capturedKey: string | undefined
+		const { adapter } = makeSlackAdapter()
+		const adapters = new Map<ChannelId, ChannelAdapter>([["slack", adapter]])
+		const deps = {
+			client: {} as never,
+			sessions: {
+				listSessions: async (key: string) => {
+					capturedKey = key
+					return [] as SessionInfo[]
+				},
+				switchSession: async () => {},
+				newSession: async () => "new-session-id",
+				currentSession: () => undefined,
+				resolveSession: async () => "some-session",
+			} as never,
+			adapters,
+			config: {
+				channels: { slack: {} },
+				router: { progress: { enabled: false, toolThrottleMs: 0, heartbeatMs: 0 } },
+			} as never,
+			logger,
+			timeoutMs: 5000,
+		}
+		const { handler } = createRouter(deps)
+		await handler(makeSlackMsg("/sessions"))
+		expect(capturedKey).toBe(buildSessionKey("slack", "C123"))
+	})
+
+	test("reply threadId is forwarded to adapter send", async () => {
+		const { adapter, sent } = makeSlackAdapter()
+		const adapters = new Map<ChannelId, ChannelAdapter>([["slack", adapter]])
+		const deps = {
+			client: {} as never,
+			sessions: {
+				listSessions: async () => [] as SessionInfo[],
+				switchSession: async () => {},
+				newSession: async () => "new-session-id",
+				currentSession: () => undefined,
+				resolveSession: async () => "some-session",
+			} as never,
+			adapters,
+			config: {
+				channels: { slack: {} },
+				router: { progress: { enabled: false, toolThrottleMs: 0, heartbeatMs: 0 } },
+			} as never,
+			logger,
+			timeoutMs: 5000,
+		}
+		const { handler } = createRouter(deps)
+		await handler(makeSlackMsg("/help", "1234567890.123456"))
+		expect(sent[0]?.threadId).toBe("1234567890.123456")
 	})
 })

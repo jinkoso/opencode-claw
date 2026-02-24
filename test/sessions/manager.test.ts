@@ -121,3 +121,25 @@ describe("listSessions", () => {
 		expect(list.every((s: SessionInfo) => !s.active)).toBe(true)
 	})
 })
+
+describe("buildSessionKey", () => {
+	test("basic key without threadId", () => {
+		expect(buildSessionKey("slack", "C123")).toBe("opencode-claw:slack:C123")
+	})
+
+	test("includes thread segment when threadId provided", () => {
+		expect(buildSessionKey("slack", "C123", "1234567890.123456")).toBe(
+			"opencode-claw:slack:C123:thread:1234567890.123456",
+		)
+	})
+
+	test("telegram key without threadId", () => {
+		expect(buildSessionKey("telegram", "alice")).toBe("opencode-claw:telegram:alice")
+	})
+
+	test("telegram key with threadId", () => {
+		expect(buildSessionKey("telegram", "alice", "42")).toBe(
+			"opencode-claw:telegram:alice:thread:42",
+		)
+	})
+})
